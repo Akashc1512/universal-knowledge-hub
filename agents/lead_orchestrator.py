@@ -27,7 +27,7 @@ class LeadOrchestrator:
         pass
 
     def plan_execution(self, query):
-        from agents.retrieval_agent import RetrievalAgent  # ✅ Import here
+        # Use the RetrievalAgent class defined in this file
         retriever = RetrievalAgent()
         return retriever.retrieve(query)
 

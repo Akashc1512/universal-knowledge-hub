@@ -1,5 +1,5 @@
 from agents.lead_orchestrator import LeadOrchestrator
 
 def test_initialization():
-    orchestrator = LeadOrchestrator(config={})
+    orchestrator = LeadOrchestrator()
     assert orchestrator is not None
