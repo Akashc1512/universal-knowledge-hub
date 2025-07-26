@@ -6,14 +6,6 @@ import asyncio
 import logging
 from datetime import datetime
 
-# Import your existing components
-import sys
-import os
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from agents.lead_orchestrator import LeadOrchestrator
-from core.types import QueryContext
-
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -63,11 +55,18 @@ async def startup_event():
     """Initialize the orchestrator on startup."""
     global orchestrator
     try:
+        # Import here to avoid circular imports
+        import sys
+        import os
+        sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        
+        from agents.lead_orchestrator import LeadOrchestrator
         orchestrator = LeadOrchestrator()
         logger.info("✅ Universal Knowledge Platform initialized successfully")
     except Exception as e:
         logger.error(f"❌ Failed to initialize orchestrator: {e}")
-        raise
+        # Don't raise - allow API to start without orchestrator for testing
+        logger.info("⚠️  Starting API without orchestrator for testing")
 
 @app.get("/", response_model=Dict[str, str])
 async def root():
@@ -86,11 +85,11 @@ async def health_check():
         version="1.0.0",
         timestamp=datetime.now(),
         agents_status={
-            "retrieval": "ready",
-            "factcheck": "ready", 
-            "synthesis": "ready",
-            "citation": "ready",
-            "orchestrator": "ready"
+            "retrieval": "ready" if orchestrator else "not_initialized",
+            "factcheck": "ready" if orchestrator else "not_initialized", 
+            "synthesis": "ready" if orchestrator else "not_initialized",
+            "citation": "ready" if orchestrator else "not_initialized",
+            "orchestrator": "ready" if orchestrator else "not_initialized"
         }
     )
 
@@ -98,12 +97,14 @@ async def health_check():
 async def process_query(request: QueryRequest):
     """Process a knowledge query through the multi-agent pipeline."""
     if not orchestrator:
-        raise HTTPException(status_code=503, detail="Service not initialized")
-    
-    start_time = datetime.now()
+        raise HTTPException(
+            status_code=503, 
+            detail="Orchestrator not initialized. Service temporarily unavailable."
+        )
     
     try:
         # Create query context
+        from core.types import QueryContext
         context = QueryContext(
             query=request.query,
             user_context=request.user_context or {},
@@ -112,27 +113,30 @@ async def process_query(request: QueryRequest):
         )
         
         # Process query through orchestrator
-        result = await orchestrator.process_query(request.query, context)
-        
+        start_time = datetime.now()
+        result = await orchestrator.process_query(context)
         execution_time = (datetime.now() - start_time).total_seconds()
         
         return QueryResponse(
             query=request.query,
-            answer=result.get('response', 'No answer generated'),
-            confidence=result.get('confidence', 0.0),
-            citations=result.get('citations', []),
+            answer=result.answer,
+            confidence=result.confidence,
+            citations=result.citations,
             execution_time=execution_time,
             timestamp=datetime.now(),
             metadata={
-                'verified_claims': result.get('verified_claims', 0),
-                'sources_consulted': result.get('sources_consulted', 0),
-                'agent_pipeline': result.get('agent_pipeline', [])
+                "agents_used": result.metadata.get("agents_used", []),
+                "tokens_used": result.metadata.get("tokens_used", 0),
+                "cache_hit": result.metadata.get("cache_hit", False)
             }
         )
         
     except Exception as e:
         logger.error(f"Error processing query: {e}")
-        raise HTTPException(status_code=500, detail=f"Query processing failed: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal server error: {str(e)}"
+        )
 
 @app.get("/agents")
 async def list_agents():
@@ -140,26 +144,44 @@ async def list_agents():
     return {
         "agents": {
             "retrieval": {
-                "description": "Hybrid search combining vector, keyword, and graph queries",
-                "capabilities": ["semantic_search", "keyword_search", "knowledge_graph"]
+                "name": "RetrievalAgent",
+                "description": "Hybrid search combining semantic and keyword matching",
+                "capabilities": ["semantic_search", "keyword_search", "hybrid_ranking"]
             },
             "factcheck": {
-                "description": "Claim verification and cross-source validation",
-                "capabilities": ["claim_decomposition", "source_verification", "confidence_scoring"]
+                "name": "FactCheckAgent", 
+                "description": "Claim verification and fact-checking",
+                "capabilities": ["claim_verification", "source_validation", "confidence_scoring"]
             },
             "synthesis": {
-                "description": "Answer construction from verified facts",
-                "capabilities": ["answer_generation", "confidence_assessment", "context_integration"]
+                "name": "SynthesisAgent",
+                "description": "Answer generation and content synthesis",
+                "capabilities": ["answer_generation", "content_synthesis", "confidence_assessment"]
             },
             "citation": {
+                "name": "CitationAgent",
                 "description": "Multi-format citation generation",
-                "capabilities": ["apa_citations", "mla_citations", "source_tracking"]
+                "capabilities": ["citation_generation", "format_conversion", "source_tracking"]
             },
             "orchestrator": {
-                "description": "Multi-agent coordination and pipeline management",
-                "capabilities": ["agent_orchestration", "execution_patterns", "result_aggregation"]
+                "name": "LeadOrchestrator",
+                "description": "Multi-agent coordination and workflow management",
+                "capabilities": ["workflow_orchestration", "agent_coordination", "result_aggregation"]
             }
-        }
+        },
+        "total_agents": 5,
+        "status": "operational" if orchestrator else "initializing"
+    }
+
+@app.get("/metrics")
+async def get_metrics():
+    """Get system metrics and performance data."""
+    return {
+        "uptime": "running",
+        "requests_processed": 0,  # TODO: Implement metrics collection
+        "average_response_time": 0.0,
+        "cache_hit_rate": 0.0,
+        "active_agents": 5 if orchestrator else 0
     }
 
 if __name__ == "__main__":
