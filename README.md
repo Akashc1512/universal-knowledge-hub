@@ -101,6 +101,22 @@ universal-knowledge-hub/
    docker run --rm -it universal-knowledge-platform:latest
    ```
 
+### API Service Setup
+
+1. **Start the FastAPI server:**
+   ```bash
+   python start_api.py
+   ```
+
+2. **Test the API endpoints:**
+   ```bash
+   python test_api.py
+   ```
+
+3. **Access the API documentation:**
+   - Swagger UI: http://localhost:8000/docs
+   - ReDoc: http://localhost:8000/redoc
+
 ## Usage Examples
 
 ### Basic Query Processing
