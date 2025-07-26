@@ -1,0 +1,313 @@
+_format_version: "2.1"
+
+# Kong API Gateway Configuration for Universal Knowledge Platform
+
+# Services
+services:
+  - name: universal-knowledge-hub-api
+    url: http://universal-knowledge-hub-api:8002
+    protocol: http
+    host: universal-knowledge-hub-api
+    port: 8002
+    connect_timeout: 60000
+    write_timeout: 60000
+    read_timeout: 60000
+    retries: 5
+
+  - name: universal-knowledge-hub-frontend
+    url: http://universal-knowledge-hub-frontend:3000
+    protocol: http
+    host: universal-knowledge-hub-frontend
+    port: 3000
+    connect_timeout: 60000
+    write_timeout: 60000
+    read_timeout: 60000
+    retries: 3
+
+# Routes
+routes:
+  # API Routes
+  - name: api-route
+    service: universal-knowledge-hub-api
+    protocols:
+      - http
+      - https
+    hosts:
+      - api.universal-knowledge-hub.com
+    paths:
+      - /api
+      - /health
+      - /docs
+      - /redoc
+      - /openapi.json
+    strip_path: false
+    preserve_host: true
+    regex_priority: 0
+    https_redirect_status_code: 426
+    path_handling: v0
+
+  # Frontend Routes
+  - name: frontend-route
+    service: universal-knowledge-hub-frontend
+    protocols:
+      - http
+      - https
+    hosts:
+      - universal-knowledge-hub.com
+      - www.universal-knowledge-hub.com
+    paths:
+      - /
+    strip_path: false
+    preserve_host: true
+    regex_priority: 0
+    https_redirect_status_code: 426
+    path_handling: v0
+
+# Plugins
+plugins:
+  # Rate Limiting
+  - name: rate-limiting
+    service: universal-knowledge-hub-api
+    config:
+      minute: 60
+      hour: 1000
+      day: 10000
+      policy: local
+      fault_tolerant: true
+      hide_client_headers: false
+
+  # CORS
+  - name: cors
+    service: universal-knowledge-hub-api
+    config:
+      origins:
+        - https://universal-knowledge-hub.com
+        - https://www.universal-knowledge-hub.com
+        - http://localhost:3000
+      methods:
+        - GET
+        - POST
+        - PUT
+        - DELETE
+        - OPTIONS
+      headers:
+        - Content-Type
+        - Authorization
+        - X-Requested-With
+      exposed_headers:
+        - X-RateLimit-Limit
+        - X-RateLimit-Remaining
+        - X-RateLimit-Reset
+      credentials: true
+      max_age: 3600
+      preflight_continue: false
+
+  # JWT Authentication
+  - name: jwt
+    service: universal-knowledge-hub-api
+    config:
+      uri_param_names:
+        - jwt
+      cookie_names:
+        - jwt
+      header_names:
+        - Authorization
+      claims_to_verify:
+        - exp
+      key_claim_name: sub
+      algorithm: HS256
+      secret: your-jwt-secret-key-here
+      key_claim_name: sub
+      anonymous: null
+      run_on_preflight: true
+
+  # Request Transformer
+  - name: request-transformer
+    service: universal-knowledge-hub-api
+    config:
+      add:
+        headers:
+          - X-API-Version: v1
+          - X-Source: kong-gateway
+      remove:
+        headers:
+          - X-Forwarded-For
+          - X-Real-IP
+
+  # Response Transformer
+  - name: response-transformer
+    service: universal-knowledge-hub-api
+    config:
+      add:
+        headers:
+          - X-Powered-By: Universal-Knowledge-Hub
+          - X-Gateway: Kong
+      remove:
+        headers:
+          - Server
+
+  # Prometheus Metrics
+  - name: prometheus
+    service: universal-knowledge-hub-api
+    config:
+      status_codes: true
+      latency: true
+      bandwidth: true
+      upstream_health: true
+
+  # Logging
+  - name: file-log
+    service: universal-knowledge-hub-api
+    config:
+      path: /var/log/kong/api.log
+      reopen: true
+
+  # Security Headers
+  - name: response-transformer
+    service: universal-knowledge-hub-api
+    config:
+      add:
+        headers:
+          - X-Content-Type-Options: nosniff
+          - X-Frame-Options: DENY
+          - X-XSS-Protection: "1; mode=block"
+          - Referrer-Policy: strict-origin-when-cross-origin
+          - Content-Security-Policy: "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'"
+
+# Consumers (for API key authentication)
+consumers:
+  - username: admin-user
+    custom_id: admin-001
+    tags:
+      - admin
+      - internal
+
+  - username: api-client
+    custom_id: client-001
+    tags:
+      - client
+      - external
+
+# API Keys
+keyauth_credentials:
+  - consumer: admin-user
+    key: admin-api-key-12345
+    tags:
+      - admin
+      - internal
+
+  - consumer: api-client
+    key: client-api-key-67890
+    tags:
+      - client
+      - external
+
+# ACL (Access Control List)
+acls:
+  - consumer: admin-user
+    group: admin
+    tags:
+      - admin
+      - internal
+
+  - consumer: api-client
+    group: user
+    tags:
+      - client
+      - external
+
+# Upstreams (for load balancing)
+upstreams:
+  - name: universal-knowledge-hub-api-upstream
+    algorithm: round-robin
+    hash_on: none
+    hash_fallback: none
+    hash_on_cookie: null
+    hash_on_cookie_path: /
+    healthchecks:
+      active:
+        type: http
+        http_path: /health
+        timeout: 1
+        concurrency: 10
+        interval: 10
+        healthy:
+          interval: 0
+          successes: 0
+        unhealthy:
+          interval: 0
+          http_failures: 0
+          tcp_failures: 0
+          timeouts: 0
+      passive:
+        type: http
+        healthy:
+          http_statuses:
+            - 200
+            - 201
+            - 202
+            - 203
+            - 204
+            - 205
+            - 206
+            - 207
+            - 208
+            - 226
+          successes: 0
+        unhealthy:
+          http_statuses:
+            - 429
+            - 500
+            - 503
+          tcp_failures: 0
+          timeouts: 0
+          http_failures: 0
+
+# Targets
+targets:
+  - target: universal-knowledge-hub-api-1:8002
+    upstream: universal-knowledge-hub-api-upstream
+    weight: 100
+    tags:
+      - api
+      - v1
+
+  - target: universal-knowledge-hub-api-2:8002
+    upstream: universal-knowledge-hub-api-upstream
+    weight: 100
+    tags:
+      - api
+      - v1
+
+# Vaults (for secrets management)
+vaults:
+  - prefix: jwt
+    name: jwt
+    config:
+      jwt_secret: your-jwt-secret-key-here
+      jwt_algorithm: HS256
+
+# Certificates (for SSL/TLS)
+certificates:
+  - cert: |
+      -----BEGIN CERTIFICATE-----
+      YOUR_CERTIFICATE_HERE
+      -----END CERTIFICATE-----
+    key: |
+      -----BEGIN PRIVATE KEY-----
+      YOUR_PRIVATE_KEY_HERE
+      -----END PRIVATE KEY-----
+    snis:
+      - api.universal-knowledge-hub.com
+      - universal-knowledge-hub.com
+      - www.universal-knowledge-hub.com
+
+# CA Certificates
+ca_certificates:
+  - cert: |
+      -----BEGIN CERTIFICATE-----
+      YOUR_CA_CERTIFICATE_HERE
+      -----END CERTIFICATE-----
+    tags:
+      - ca
+      - production 

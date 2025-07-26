@@ -50,42 +50,63 @@ class FactCheckAgent(BaseAgent):
     def decompose_claims(self, claims: List[str]) -> List[str]:
         """
         Decompose complex statements into atomic claims for independent verification.
-        TODO: Use NLP/LLM for robust decomposition (SAFE, etc.).
+        Simulate LLM/NLP-based decomposition: split by periods and conjunctions (and, or, but).
         """
         atomic_claims = []
         for claim in claims:
-            # Naive split: treat each sentence as an atomic claim (replace with NLP/LLM logic)
-            atomic_claims.extend([c.strip() for c in claim.split('.') if c.strip()])
+            # Split by period
+            sentences = [c.strip() for c in claim.split('.') if c.strip()]
+            for sentence in sentences:
+                # Further split by conjunctions (simulate LLM/NLP)
+                for conj in [' and ', ' or ', ' but ']:
+                    if conj in sentence:
+                        parts = [p.strip() for p in sentence.split(conj) if p.strip()]
+                        atomic_claims.extend(parts)
+                        break
+                else:
+                    atomic_claims.append(sentence)
+        logger.info(f"Decomposed claims: {atomic_claims}")
         return atomic_claims
 
     async def verify_claim(self, claim: str, sources: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
         Verify a single claim against multiple sources.
-        Returns a verdict, confidence, evidence, and justification for explainability.
-        TODO: Integrate LLM, KG, and search engine checks for richer evidence.
+        Simulate cross-source validation: if some sources support and some contradict, mark as 'contested'.
         """
         await asyncio.sleep(0.05)  # Simulate processing
         evidence = []
         verdict = 'unverifiable'
         confidence = 0.0
         justification = []
+        support_count = 0
+        contradict_count = 0
         for source in sources:
-            # Placeholder: treat all sources as supporting
-            support = True  # TODO: Replace with real evidence check
+            # Simulate: alternate support/contradict for demo
+            import random
+            support = random.choice([True, False])
             if support:
                 evidence.append({
                     'source': source,
                     'supporting_text': f'Evidence supporting: {claim}',
                     'relevance_score': 0.9
                 })
-                verdict = 'supported'
-                confidence = max(confidence, 0.85)
-                justification.append(f"Matched claim '{claim}' to source '{source.get('title', 'unknown')}'")
+                support_count += 1
+                justification.append(f"Supported by '{source.get('title', 'unknown')}'")
             else:
-                justification.append(f"No match for claim '{claim}' in source '{source.get('title', 'unknown')}'")
-        if not evidence:
-            justification.append("No supporting evidence found in provided sources.")
-        # If multiple sources, aggregate confidence and justification
+                contradict_count += 1
+                justification.append(f"Contradicted by '{source.get('title', 'unknown')}'")
+        if support_count and contradict_count:
+            verdict = 'contested'
+            confidence = 0.5
+            justification.append("Conflicting evidence found across sources.")
+        elif support_count:
+            verdict = 'supported'
+            confidence = min(1.0, 0.7 + 0.1 * support_count)
+        elif contradict_count:
+            verdict = 'contradicted'
+            confidence = 0.3
+        else:
+            justification.append("No supporting or contradicting evidence found.")
         return {
             'claim': claim,
             'verdict': verdict,
@@ -97,13 +118,15 @@ class FactCheckAgent(BaseAgent):
     async def verify_claims(self, claims: List[str], sources: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
         Verify multiple claims in parallel, consulting all sources for each claim.
-        Returns a list of results with attribution and explainability.
-        TODO: Add cross-claim consistency checks.
+        Flag 'contested' or 'unverifiable' claims for human review if callback is set.
         """
-        verification_tasks = [
-            self.verify_claim(claim, sources) for claim in claims
-        ]
+        verification_tasks = [self.verify_claim(claim, sources) for claim in claims]
         results = await asyncio.gather(*verification_tasks)
+        # Human-in-the-loop: flag contested/unverifiable
+        flagged = [r for r in results if r['verdict'] in ('contested', 'unverifiable')]
+        if flagged and self.manual_review_callback:
+            logger.info(f"Flagging {len(flagged)} claims for manual review (contested/unverifiable).")
+            self.manual_review_callback(flagged)
         # TODO: Implement cross-claim consistency checking
         return results
 

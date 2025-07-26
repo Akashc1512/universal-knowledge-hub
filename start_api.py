@@ -21,13 +21,25 @@ def main():
     
     # Configuration
     host = os.getenv("UKP_HOST", "0.0.0.0")
-    port = int(os.getenv("UKP_PORT", "8000"))
+    port = int(os.getenv("UKP_PORT", "8002"))
     reload = os.getenv("UKP_RELOAD", "false").lower() == "true"
     
     logger.info("🚀 Starting Universal Knowledge Platform API Server")
     logger.info(f"📍 Host: {host}")
     logger.info(f"🔌 Port: {port}")
     logger.info(f"🔄 Reload: {reload}")
+    
+    # Check if port is available
+    import socket
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.bind((host, port))
+        sock.close()
+        logger.info(f"✅ Port {port} is available")
+    except OSError:
+        logger.error(f"❌ Port {port} is already in use. Please choose a different port.")
+        logger.info(f"💡 Try: set UKP_PORT=8003 && python start_api.py")
+        return
     
     try:
         uvicorn.run(

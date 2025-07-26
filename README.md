@@ -107,15 +107,26 @@ universal-knowledge-hub/
    ```bash
    python start_api.py
    ```
+   
+   Or use the management script:
+   ```bash
+   python manage_api.py start
+   ```
 
 2. **Test the API endpoints:**
    ```bash
-   python test_api.py
+   python test_api_simple.py
    ```
 
-3. **Access the API documentation:**
-   - Swagger UI: http://localhost:8000/docs
-   - ReDoc: http://localhost:8000/redoc
+3. **Check server status:**
+   ```bash
+   python manage_api.py status
+   ```
+
+4. **Access the API documentation:**
+   - Swagger UI: http://localhost:8002/docs
+   - ReDoc: http://localhost:8002/redoc
+   - Health Check: http://localhost:8002/health
 
 ## Usage Examples
 

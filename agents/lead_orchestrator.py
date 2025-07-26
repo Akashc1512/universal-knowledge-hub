@@ -17,6 +17,9 @@ import logging
 from collections import defaultdict
 from functools import lru_cache
 
+# Import from base_agent to avoid duplication
+from agents.base_agent import QueryContext, AgentResult, AgentMessage, MessageType, TaskPriority, AgentType, BaseAgent
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -90,17 +93,7 @@ class AgentMessage:
     })
 
 
-@dataclass
-class QueryContext:
-    """Context information for query processing"""
-    query: str
-    user_id: Optional[str] = None
-    session_id: Optional[str] = None
-    domains: List[str] = field(default_factory=list)
-    complexity_score: float = 0.0
-    token_budget: int = 1000
-    timeout_ms: int = 5000
-    metadata: Dict[str, Any] = field(default_factory=dict)
+# QueryContext is now imported from base_agent
 
 
 @dataclass
@@ -643,6 +636,7 @@ class LeadOrchestrator:
         self.token_controller = TokenBudgetController()
         self.cache_manager = SemanticCacheManager()
         self.response_aggregator = ResponseAggregator()
+        self.task_queue = asyncio.Queue()  # Add missing task_queue
         self._initialize_agents()
         
     def _initialize_agents(self):
@@ -743,31 +737,46 @@ class LeadOrchestrator:
     async def execute_pipeline(self, context: QueryContext, plan: Dict[str, Any]) -> Dict[str, Any]:
         """
         Execute simple sequential pipeline.
-        
         Flow: Retrieval -> Fact-Check -> Synthesis -> Citation
         """
         results = {}
         current_data = None
-        
+        total_tokens_used = 0
+        agent_budgets = {}
+        agent_tokens = {}
+        # Calculate per-agent budgets
+        for agent_type in plan['required_agents']:
+            agent_budgets[agent_type] = self.token_controller.get_agent_budget(agent_type, context.token_budget)
         # Sequential execution
         for agent_type in plan['required_agents']:
             agent = self.agents[agent_type]
-            
-            # Prepare task based on previous results
             task = self._prepare_task_for_agent(agent_type, current_data, context)
-            
-            # Execute agent task
-            agent_result = await agent.process_task(task, context)
-            
+            # Simulate token usage (random for now, replace with real count in production)
+            import random
+            simulated_tokens = random.randint(100, 400)
+            agent_tokens[agent_type] = simulated_tokens
+            if simulated_tokens > agent_budgets[agent_type]:
+                logger.warning(f"[TOKEN] {agent_type} exceeded budget ({simulated_tokens} > {agent_budgets[agent_type]}) - simulating truncation.")
+                agent_result = AgentResult(
+                    success=False,
+                    data=None,
+                    confidence=0.0,
+                    token_usage={'prompt': simulated_tokens, 'completion': 0},
+                    execution_time_ms=0,
+                    error=f"Token budget exceeded for {agent_type}",
+                    metadata={}
+                )
+            else:
+                agent_result = await agent.process_task(task, context)
+                agent_result.token_usage['prompt'] = simulated_tokens
+            total_tokens_used += simulated_tokens
             if not agent_result.success:
                 logger.error(f"{agent_type} failed: {agent_result.error}")
-                # TODO: Implement fallback strategies
                 continue
-            
             results[agent_type] = agent_result
             current_data = agent_result.data
-        
-        # Aggregate final response
+        logger.info(f"[TOKEN] Total tokens used for query: {total_tokens_used}")
+        logger.info(f"[TOKEN] Per-agent usage: {agent_tokens}")
         return self.response_aggregator.aggregate_pipeline_results(results, context)
     
     async def execute_fork_join(self, context: QueryContext, plan: Dict[str, Any]) -> Dict[str, Any]:

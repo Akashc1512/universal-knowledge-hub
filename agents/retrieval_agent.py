@@ -19,18 +19,7 @@ from functools import lru_cache
 import aiohttp
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 from core.types import Document
-
-
-# agents/retrieval_agent.py
-
-class RetrievalAgent:
-    def __init__(self):
-        pass
-
-    def retrieve(self, query: str) -> List[Document]:
-        """Synchronously retrieve top results for a query."""
-        return asyncio.run(self.hybrid_retrieve(query=query, entities=[]))
-
+from agents.base_agent import AgentResult  # Add import for AgentResult
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -126,6 +115,29 @@ class VectorDBClient:
         """
         # Placeholder: return random embedding
         return np.random.rand(384).tolist()
+    
+    async def search_similar(self, query: str, top_k: int = 20) -> List[Dict[str, Any]]:
+        """
+        Search for similar vectors using text query.
+        This is a convenience method that combines embedding and search.
+        """
+        # Get embedding for the query
+        query_embedding = await self.get_embedding(query)
+        
+        # Search using the embedding
+        results = await self.search(query_embedding, top_k)
+        
+        # Convert results to the expected format
+        formatted_results = []
+        for result in results:
+            formatted_results.append({
+                'id': result.get('id', ''),
+                'content': result.get('payload', {}).get('content', ''),
+                'score': result.get('score', 0.0),
+                'metadata': result.get('payload', {}).get('metadata', {})
+            })
+        
+        return formatted_results
 
 
 class ElasticsearchClient:
@@ -163,6 +175,27 @@ class ElasticsearchClient:
                 ]
             }
         }
+    
+    async def search_documents(self, query: str, top_k: int = 20) -> List[Dict[str, Any]]:
+        """
+        Search documents using Elasticsearch.
+        This is a convenience method that returns documents in a simplified format.
+        """
+        # Perform the search
+        search_result = await self.search(query, top_k)
+        
+        # Extract and format documents
+        documents = []
+        for hit in search_result.get('hits', {}).get('hits', []):
+            source = hit.get('_source', {})
+            documents.append({
+                'id': hit.get('_id', ''),
+                'content': source.get('content', ''),
+                'score': hit.get('_score', 0.0),
+                'source': source.get('source', 'elasticsearch')
+            })
+        
+        return documents
 
 
 class KnowledgeGraphClient:
@@ -208,54 +241,65 @@ class SemanticCache:
         self.embeddings = {}  # TODO: Store in vector DB for similarity search
         self.similarity_threshold = similarity_threshold
         self.ttl_seconds = 3600  # 1 hour default TTL
+        self.logger = logging.getLogger("SemanticCache")
         
     async def get(self, query: str, query_embedding: List[float] = None) -> Optional[SearchResult]:
         """
         Retrieve cached result for semantically similar query.
-        
-        TODO:
-        - Implement semantic similarity search using query embedding
-        - Check TTL and invalidate expired entries
-        - Track cache hit metrics
+        - First, try exact match
+        - Then, try stubbed semantic similarity (returns first cache entry if query is similar)
         """
-        # Direct cache hit
         cache_key = self._generate_cache_key(query)
         if cache_key in self.cache:
             cached_data = self.cache[cache_key]
             if self._is_valid(cached_data):
-                logger.info(f"Cache hit for query: {query[:50]}...")
+                self.logger.info(f"[CACHE] Exact match hit for query: {query[:50]}...")
                 return cached_data['result']
-        
-        # TODO: Implement semantic similarity search
-        # For now, return None (cache miss)
+            else:
+                self.logger.info(f"[CACHE] Exact match expired for query: {query[:50]}...")
+        # Stub: simulate semantic similarity by returning any valid cache entry if query is similar
+        for k, v in self.cache.items():
+            if self._is_valid(v):
+                # Get original query from cache data
+                original_query = v.get('original_query')
+                if original_query and self._is_semantically_similar(query, original_query):
+                    self.logger.info(f"[CACHE] Semantic similarity hit for query: {query[:50]} ~ {original_query[:50]}")
+                    return v['result']
+        self.logger.info(f"[CACHE] Miss for query: {query[:50]}...")
         return None
     
     async def set(self, query: str, result: SearchResult, query_embedding: List[float] = None):
         """
         Cache query result with embedding.
-        
-        TODO:
-        - Store embedding for semantic search
-        - Implement cache eviction policy
-        - Add to semantic index
         """
         cache_key = self._generate_cache_key(query)
         self.cache[cache_key] = {
             'result': result,
             'timestamp': datetime.utcnow(),
-            'embedding': query_embedding
+            'embedding': query_embedding,
+            'original_query': query  # Store original query for semantic similarity
         }
-        
-        # TODO: Add to vector index for semantic search
-        
+        self.logger.info(f"[CACHE] Set for query: {query[:50]}...")
+    
     def _generate_cache_key(self, query: str) -> str:
         """Generate cache key from query"""
         return hashlib.md5(query.encode()).hexdigest()
+    
+
     
     def _is_valid(self, cached_data: Dict[str, Any]) -> bool:
         """Check if cached data is still valid"""
         age = (datetime.utcnow() - cached_data['timestamp']).total_seconds()
         return age < self.ttl_seconds
+    
+    def _is_semantically_similar(self, query1: str, query2: str) -> bool:
+        """
+        Stub: consider queries similar if they share at least 3 words (case-insensitive).
+        Replace with real embedding similarity in production.
+        """
+        words1 = set(query1.lower().split())
+        words2 = set(query2.lower().split())
+        return len(words1 & words2) >= 3
 
 
 # ============================================================================
@@ -264,377 +308,206 @@ class SemanticCache:
 
 class RetrievalAgent:
     """
-    Advanced retrieval agent combining multiple search strategies with
-    caching, error handling, and LLM-based result optimization.
+    Advanced retrieval agent that combines vector search, keyword search, and knowledge graph queries.
     """
     
     def __init__(self, config: Dict[str, Any] = None):
         self.config = config or self._default_config()
+        self.max_retries = self.config.get('max_retries', 3)
+        self.timeout = self.config.get('timeout', 30)
         
         # Initialize clients
         self.vector_db = VectorDBClient(self.config.get('vector_db', {}))
-        self.elasticsearch = ElasticsearchClient(self.config.get('elasticsearch', {}))
-        self.knowledge_graph = KnowledgeGraphClient(self.config.get('knowledge_graph', {}))
+        self.elasticsearch_client = ElasticsearchClient(self.config.get('elasticsearch', {}))
+        self.knowledge_graph_client = KnowledgeGraphClient(self.config.get('knowledge_graph', {}))
         
-        # Initialize cache
-        self.cache = SemanticCache(
+        # Initialize semantic cache
+        self.semantic_cache = SemanticCache(
             similarity_threshold=self.config.get('cache_similarity_threshold', 0.92)
         )
         
-        # Performance settings
-        self.timeout_seconds = self.config.get('timeout_seconds', 5)
-        self.max_retries = self.config.get('max_retries', 3)
+        # Performance tracking
+        self.stats = {
+            'total_queries': 0,
+            'cache_hits': 0,
+            'cache_misses': 0,
+            'avg_response_time': 0.0
+        }
         
-        # LLM settings for result optimization
-        self.llm_endpoint = self.config.get('llm_endpoint', '')  # TODO: Configure LLM endpoint
-        self.llm_api_key = self.config.get('llm_api_key', '')   # TODO: Add API key
-        
+        logger.info("RetrievalAgent initialized successfully")
+    
     def _default_config(self) -> Dict[str, Any]:
-        """Default configuration"""
+        """Default configuration for the retrieval agent."""
         return {
+            'max_retries': 3,
+            'timeout': 30,
+            'cache_similarity_threshold': 0.92,
             'vector_db': {
-                'url': 'http://localhost:6333',  # Qdrant default
+                'host': 'localhost',
+                'port': 6333,
                 'collection': 'knowledge_base'
             },
             'elasticsearch': {
-                'url': 'http://localhost:9200',
-                'index_name': 'knowledge_base'
+                'host': 'localhost',
+                'port': 9200,
+                'index': 'knowledge_base'
             },
             'knowledge_graph': {
-                'sparql_endpoint': 'http://localhost:8890/sparql'
-            },
-            'timeout_seconds': 5,
-            'max_retries': 3
+                'endpoint': 'http://localhost:7200/repositories/knowledge_base',
+                'username': '',
+                'password': ''
+            }
         }
     
     async def vector_search(self, query: str, top_k: int = 20) -> SearchResult:
-        """
-        Perform semantic vector search with caching and error handling.
-        
-        TODO Integration Points:
-        - Connect to actual vector DB (Qdrant/Weaviate/Pinecone)
-        - Use real embedding model (sentence-transformers)
-        - Implement metadata filtering
-        """
+        """Perform vector similarity search."""
         start_time = time.time()
         
         try:
-            # Check cache first
-            cached_result = await self.cache.get(f"vector:{query}")
-            if cached_result:
-                return cached_result
-            
-            # Generate query embedding
-            # TODO: Use actual embedding model here
+            # Get query embedding
             query_embedding = await self.vector_db.get_embedding(query)
             
-            # Perform vector search with retry logic
-            @retry(
-                stop=stop_after_attempt(self.max_retries),
-                wait=wait_exponential(multiplier=1, min=1, max=10),
-                retry=retry_if_exception_type(Exception)
-            )
-            async def _search_with_retry():
-                return await self.vector_db.search(
-                    query_embedding=query_embedding,
-                    top_k=top_k,
-                    filters={}  # TODO: Add metadata filters
-                )
+            # Search vector database
+            results = await self.vector_db.search(query_embedding, top_k)
             
-            raw_results = await asyncio.wait_for(
-                _search_with_retry(),
-                timeout=self.timeout_seconds
-            )
-            
-            # Convert to Document format
+            # Convert to Document objects
             documents = []
-            for item in raw_results:
+            for result in results:
                 doc = Document(
-                    content=item['payload']['content'],
-                    score=item['score'],
+                    content=result.get('content', ''),
+                    score=result.get('score', 0.0),
                     source='vector_search',
-                    metadata=item['payload'].get('metadata', {}),
-                    doc_id=item['id']
+                    metadata=result.get('metadata', {}),
+                    doc_id=result.get('id', ''),
+                    chunk_id=result.get('chunk_id'),
+                    timestamp=result.get('timestamp')
                 )
                 documents.append(doc)
             
-            # TODO: LLM-based result prioritization
-            # Prompt template for result optimization:
-            """
-            # LLM Result Prioritization (TODO: Implement)
-            prompt = f'''
-            Given the user query: "{query}"
+            query_time = int((time.time() - start_time) * 1000)
             
-            And the following retrieved documents:
-            {self._format_documents_for_llm(documents[:10])}
-            
-            Please analyze and rank these documents by relevance to the query.
-            Consider:
-            1. Semantic relevance to the query intent
-            2. Information completeness
-            3. Factual accuracy indicators
-            4. Recency if applicable
-            
-            Return a JSON array of document IDs ordered by relevance with reasoning.
-            '''
-            
-            # reranked_docs = await self._llm_rerank(prompt, documents)
-            """
-            
-            result = SearchResult(
+            return SearchResult(
                 documents=documents,
                 search_type='vector',
-                query_time_ms=int((time.time() - start_time) * 1000),
-                total_hits=len(documents),
-                metadata={'embedding_model': 'sentence-transformers/all-MiniLM-L6-v2'}  # TODO: Actual model
+                query_time_ms=query_time,
+                total_hits=len(documents)
             )
             
-            # Cache the result
-            await self.cache.set(f"vector:{query}", result, query_embedding)
-            
-            return result
-            
-        except asyncio.TimeoutError:
-            logger.error(f"Vector search timeout for query: {query}")
-            # Fallback to keyword search
-            return await self.keyword_search(query, top_k)
-            
         except Exception as e:
-            logger.error(f"Vector search error: {str(e)}")
-            # Fallback to keyword search
-            return await self.keyword_search(query, top_k)
+            logger.error(f"Vector search failed: {e}")
+            return SearchResult(
+                documents=[],
+                search_type='vector',
+                query_time_ms=int((time.time() - start_time) * 1000),
+                total_hits=0
+            )
     
     async def keyword_search(self, query: str, top_k: int = 20) -> SearchResult:
-        """
-        Perform BM25 keyword search with field boosting and filters.
-        
-        TODO Integration Points:
-        - Connect to actual Elasticsearch cluster
-        - Implement query expansion with synonyms
-        - Add field-specific boosting
-        - Implement faceted search
-        """
+        """Perform keyword-based search using Elasticsearch."""
         start_time = time.time()
         
         try:
-            # Check cache
-            cached_result = await self.cache.get(f"keyword:{query}")
-            if cached_result:
-                return cached_result
+            # Search Elasticsearch
+            results = await self.elasticsearch_client.search_documents(query, top_k)
             
-            # Build Elasticsearch query
-            # TODO: Implement sophisticated query building
-            es_query = {
-                "query": {
-                    "multi_match": {
-                        "query": query,
-                        "fields": ["content^1.0", "title^2.0", "abstract^1.5"],
-                        "type": "best_fields",
-                        "fuzziness": "AUTO"
-                    }
-                },
-                "size": top_k,
-                "_source": ["content", "title", "metadata"]
-            }
-            
-            # Execute search with timeout
-            raw_results = await asyncio.wait_for(
-                self.elasticsearch.search(query, top_k),
-                timeout=self.timeout_seconds
-            )
-            
-            # Convert to Document format
+            # Convert to Document objects
             documents = []
-            for hit in raw_results['hits']['hits']:
+            for result in results:
                 doc = Document(
-                    content=hit['_source']['content'],
-                    score=hit['_score'] / 10.0,  # Normalize score
+                    content=result.get('content', ''),
+                    score=result.get('score', 0.0),
                     source='keyword_search',
-                    metadata=hit['_source'].get('metadata', {}),
-                    doc_id=hit['_id']
+                    metadata=result.get('metadata', {}),
+                    doc_id=result.get('id', ''),
+                    chunk_id=None, # Elasticsearch doesn't have chunk_id in this simplified format
+                    timestamp=None # Elasticsearch doesn't have timestamp in this simplified format
                 )
                 documents.append(doc)
             
-            # TODO: Query expansion and re-search if needed
-            """
-            # Query Expansion Template (TODO: Implement)
-            if len(documents) < 5:
-                expansion_prompt = f'''
-                The query "{query}" returned few results.
-                Generate 3 alternative queries that might find relevant information:
-                1. A broader version
-                2. A query with synonyms
-                3. A related concept query
-                
-                Return as JSON array of strings.
-                '''
-                # expanded_queries = await self._llm_expand_query(expansion_prompt)
-                # additional_results = await self._search_expanded_queries(expanded_queries)
-            """
+            query_time = int((time.time() - start_time) * 1000)
             
-            result = SearchResult(
+            return SearchResult(
                 documents=documents,
                 search_type='keyword',
-                query_time_ms=int((time.time() - start_time) * 1000),
-                total_hits=raw_results['hits']['total']['value'],
-                metadata={'query_type': 'multi_match', 'fuzziness': 'AUTO'}
+                query_time_ms=query_time,
+                total_hits=len(documents) # Elasticsearch doesn't return total_hits in this simplified format
             )
             
-            # Cache the result
-            await self.cache.set(f"keyword:{query}", result)
-            
-            return result
-            
         except Exception as e:
-            logger.error(f"Keyword search error: {str(e)}")
-            # Return empty result as last resort
+            logger.error(f"Keyword search failed: {e}")
             return SearchResult(
                 documents=[],
                 search_type='keyword',
                 query_time_ms=int((time.time() - start_time) * 1000),
-                total_hits=0,
-                metadata={'error': str(e)}
+                total_hits=0
             )
     
-    async def graph_query(self, entities: List[str], top_k: int = 20) -> SearchResult:
-        """
-        Query knowledge graph for entity relationships and facts.
-        
-        TODO Integration Points:
-        - Connect to actual SPARQL endpoint (Blazegraph/Virtuoso)
-        - Implement entity linking/disambiguation
-        - Add inference and reasoning capabilities
-        - Support for multiple knowledge graphs (Wikidata, DBpedia)
-        """
+    async def graph_search(self, entities: List[str], top_k: int = 20) -> SearchResult:
+        """Perform knowledge graph search using SPARQL."""
         start_time = time.time()
         
         try:
-            # Check cache
-            cache_key = f"graph:{','.join(sorted(entities))}"
-            cached_result = await self.cache.get(cache_key)
-            if cached_result:
-                return cached_result
+            # Build SPARQL query from entities
+            sparql_query = self._build_sparql_query(entities)
             
-            # Build SPARQL queries for each entity
-            sparql_queries = []
+            # Query knowledge graph
+            results = await self.knowledge_graph_client.query_sparql(sparql_query)
             
-            for entity in entities:
-                # TODO: Implement entity disambiguation
-                # entity_uri = await self._disambiguate_entity(entity)
-                
-                # Basic fact retrieval query
-                fact_query = f"""
-                SELECT ?predicate ?object ?confidence
-                WHERE {{
-                    <{entity}> ?predicate ?object .
-                    OPTIONAL {{ 
-                        GRAPH ?g {{ 
-                            <{entity}> ?predicate ?object 
-                        }}
-                        ?g <confidence> ?confidence 
-                    }}
-                }}
-                LIMIT {top_k}
-                """
-                sparql_queries.append(fact_query)
-                
-                # Relationship query (2-hop)
-                relationship_query = f"""
-                SELECT ?related ?relationship ?secondHop
-                WHERE {{
-                    {{ <{entity}> ?relationship ?related }}
-                    UNION
-                    {{ ?related ?relationship <{entity}> }}
-                    OPTIONAL {{
-                        ?related ?rel2 ?secondHop .
-                        FILTER(?secondHop != <{entity}>)
-                    }}
-                }}
-                LIMIT {top_k}
-                """
-                sparql_queries.append(relationship_query)
-            
-            # Execute queries in parallel
-            query_tasks = [
-                self.knowledge_graph.query_sparql(query)
-                for query in sparql_queries
-            ]
-            
-            results = await asyncio.gather(*query_tasks, return_exceptions=True)
-            
-            # Process results into documents
+            # Convert to Document objects
             documents = []
-            triple_count = 0
+            for result in results:
+                # Convert SPARQL result to document format
+                content = f"{result.get('subject', '')} {result.get('predicate', '')} {result.get('object', '')}"
+                doc = Document(
+                    content=content,
+                    score=result.get('confidence', 1.0),
+                    source='knowledge_graph',
+                    metadata={
+                        'subject': result.get('subject', ''),
+                        'predicate': result.get('predicate', ''),
+                        'object': result.get('object', ''),
+                        'confidence': result.get('confidence', 1.0)
+                    },
+                    doc_id=f"graph_{hash(content)}",
+                    timestamp=datetime.now().isoformat()
+                )
+                documents.append(doc)
             
-            for i, result in enumerate(results):
-                if isinstance(result, Exception):
-                    logger.error(f"Graph query error for entity {entities[i // 2]}: {result}")
-                    continue
-                
-                for item in result:
-                    # Convert triple to document
-                    content = f"{item['subject']} {item['predicate']} {item['object']}"
-                    
-                    doc = Document(
-                        content=content,
-                        score=item.get('confidence', 0.8),
-                        source='knowledge_graph',
-                        metadata={
-                            'triple': item,
-                            'entity': entities[i // 2]
-                        },
-                        doc_id=f"triple_{triple_count}"
-                    )
-                    documents.append(doc)
-                    triple_count += 1
+            query_time = int((time.time() - start_time) * 1000)
             
-            # TODO: LLM-based fact synthesis
-            """
-            # Fact Synthesis Template (TODO: Implement)
-            if documents:
-                synthesis_prompt = f'''
-                Given these facts about {entities}:
-                {self._format_triples_for_llm(documents[:20])}
-                
-                Synthesize the most important and relevant facts into a coherent summary.
-                Focus on:
-                1. Key attributes and properties
-                2. Important relationships
-                3. Notable facts
-                
-                Return as structured JSON with categories.
-                '''
-                # synthesized_facts = await self._llm_synthesize_facts(synthesis_prompt)
-            """
-            
-            # Sort by relevance score
-            documents.sort(key=lambda x: x.score, reverse=True)
-            
-            result = SearchResult(
-                documents=documents[:top_k],
+            return SearchResult(
+                documents=documents,
                 search_type='graph',
-                query_time_ms=int((time.time() - start_time) * 1000),
-                total_hits=len(documents),
-                metadata={
-                    'entities_queried': entities,
-                    'triple_count': triple_count
-                }
+                query_time_ms=query_time,
+                total_hits=len(documents)
             )
             
-            # Cache the result
-            await self.cache.set(cache_key, result)
-            
-            return result
-            
         except Exception as e:
-            logger.error(f"Graph query error: {str(e)}")
+            logger.error(f"Graph search failed: {e}")
             return SearchResult(
                 documents=[],
                 search_type='graph',
                 query_time_ms=int((time.time() - start_time) * 1000),
-                total_hits=0,
-                metadata={'error': str(e)}
+                total_hits=0
             )
+    
+    def _build_sparql_query(self, entities: List[str]) -> str:
+        """Build SPARQL query from entities."""
+        if not entities:
+            return ""
+        
+        entity_filters = " || ".join([f'?s = <{entity}>' for entity in entities])
+        
+        query = f"""
+        SELECT ?s ?p ?o ?confidence
+        WHERE {{
+            ?s ?p ?o .
+            FILTER({entity_filters})
+            OPTIONAL {{ ?s <http://example.org/confidence> ?confidence }}
+        }}
+        LIMIT 20
+        """
+        return query
     
     async def hybrid_retrieve(self, query: str, entities: List[str] = None) -> SearchResult:
         """
@@ -656,7 +529,7 @@ class RetrievalAgent:
             
             # Check cache for hybrid results
             cache_key = f"hybrid:{query}:{','.join(sorted(entities or []))}"
-            cached_result = await self.cache.get(cache_key)
+            cached_result = await self.semantic_cache.get(cache_key)
             if cached_result:
                 return cached_result
             
@@ -668,12 +541,12 @@ class RetrievalAgent:
             
             # Add graph search if entities are available
             if entities:
-                search_tasks.append(self.graph_query(entities, top_k=20))
+                search_tasks.append(self.graph_search(entities, top_k=20))
             
             # Execute with timeout
             results = await asyncio.wait_for(
                 asyncio.gather(*search_tasks, return_exceptions=True),
-                timeout=self.timeout_seconds * 1.5  # Allow more time for parallel execution
+                timeout=self.timeout * 1.5  # Allow more time for parallel execution
             )
             
             # Process results and handle failures
@@ -734,7 +607,7 @@ class RetrievalAgent:
             )
             
             # Cache the result
-            await self.cache.set(cache_key, result)
+            await self.semantic_cache.set(cache_key, result)
             
             return result
             
@@ -911,6 +784,35 @@ Source: {doc.source}
         # Placeholder
         return []
 
+    async def process_task(self, task: Dict[str, Any], context) -> AgentResult:
+        """Process a retrieval task."""
+        try:
+            query = task.get('query', context.query)
+            entities = task.get('entities', [])
+            
+            # Perform hybrid retrieval
+            result = await self.hybrid_retrieve(query, entities)
+            
+            # Convert to AgentResult format
+            return AgentResult(
+                success=True,
+                data=result.documents,
+                confidence=0.8,  # Placeholder confidence
+                token_usage={'prompt': 0, 'completion': 0},
+                execution_time_ms=result.query_time_ms,
+                metadata={'search_type': result.search_type, 'total_hits': result.total_hits}
+            )
+        except Exception as e:
+            logger.error(f"Retrieval task failed: {e}")
+            return AgentResult(
+                success=False,
+                data=[],
+                confidence=0.0,
+                token_usage={'prompt': 0, 'completion': 0},
+                execution_time_ms=0,
+                error=str(e)
+            )
+
 
 # ============================================================================
 # Usage Example and Testing
@@ -960,7 +862,7 @@ async def main():
     # Example 3: Knowledge graph query
     print("\n=== Knowledge Graph Example ===")
     entities = ["Albert_Einstein", "Theory_of_Relativity"]
-    graph_results = await agent.graph_query(entities, top_k=15)
+    graph_results = await agent.graph_search(entities, top_k=15)
     print(f"Found {len(graph_results.documents)} facts about {entities}")
     
     # Example 4: Hybrid retrieval

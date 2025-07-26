@@ -82,6 +82,7 @@ class QueryContext:
     complexity_score: float = 0.0
     token_budget: int = 1000
     timeout_ms: int = 5000
+    user_context: Optional[Dict[str, Any]] = field(default_factory=dict)
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 

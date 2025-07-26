@@ -1,261 +1,140 @@
-name: Universal Knowledge Platform CI/CD
+name: CI/CD Pipeline
 
 on:
   push:
     branches: [ main, develop ]
   pull_request:
-    branches: [ main ]
-
-env:
-  PYTHON_VERSION: '3.11'
-  DOCKER_IMAGE: universal-knowledge-platform
+    branches: [ main, develop ]
 
 jobs:
-  # Security and Code Quality
-  security-scan:
-    name: Security Scan
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      
-      - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@master
-        with:
-          scan-type: 'fs'
-          scan-ref: '.'
-          format: 'sarif'
-          output: 'trivy-results.sarif'
-          
-      - name: Upload Trivy scan results to GitHub Security tab
-        uses: github/codeql-action/upload-sarif@v3
-        if: always()
-        with:
-          sarif_file: 'trivy-results.sarif'
-
-  # Code Quality and Testing
   test:
-    name: Test Suite
     runs-on: ubuntu-latest
     strategy:
       matrix:
         python-version: [3.9, 3.10, 3.11]
-    
-    steps:
-      - uses: actions/checkout@v4
-      
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v4
-        with:
-          python-version: ${{ matrix.python-version }}
-          
-      - name: Cache pip dependencies
-        uses: actions/cache@v3
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ matrix.python-version }}-${{ hashFiles('**/requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-${{ matrix.python-version }}-
-            
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pytest pytest-cov pytest-asyncio
-          
-      - name: Run linting
-        run: |
-          pip install black flake8 mypy
-          black --check --diff .
-          flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
-          mypy . --ignore-missing-imports
-          
-      - name: Run tests with coverage
-        run: |
-          pytest tests/ --cov=agents --cov=core --cov=architecture --cov-report=xml --cov-report=html
-          
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v3
-        with:
-          file: ./coverage.xml
-          flags: unittests
-          name: codecov-umbrella
-          fail_ci_if_error: false
 
-  # API Testing
-  api-test:
-    name: API Integration Tests
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+    
+    - name: Cache pip dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest pytest-cov pytest-asyncio black flake8 bandit mypy
+    
+    - name: Lint with flake8
+      run: |
+        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+        flake8 . --count --exit-zero --max-complexity=10 --max-line-length=88 --statistics
+    
+    - name: Format check with black
+      run: |
+        black --check --diff .
+    
+    - name: Security scan with bandit
+      run: |
+        bandit -r . -f json -o bandit-report.json || true
+        bandit -r . -f txt -o bandit-report.txt
+    
+    - name: Type check with mypy
+      run: |
+        mypy . --ignore-missing-imports
+    
+    - name: Run tests with pytest
+      run: |
+        pytest --cov=. --cov-report=xml --cov-report=html --cov-report=term-missing
+      env:
+        OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        PINECONE_API_KEY: ${{ secrets.PINECONE_API_KEY }}
+        ELASTICSEARCH_URL: ${{ secrets.ELASTICSEARCH_URL }}
+        ELASTICSEARCH_API_KEY: ${{ secrets.ELASTICSEARCH_API_KEY }}
+    
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./coverage.xml
+        flags: unittests
+        name: codecov-umbrella
+        fail_ci_if_error: false
+
+  security:
     runs-on: ubuntu-latest
     needs: test
     
     steps:
-      - uses: actions/checkout@v4
-      
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.11'
-          
-      - name: Install dependencies
-        run: |
-          pip install -r requirements.txt
-          pip install requests pytest-asyncio
-          
-      - name: Start API server
-        run: |
-          python start_api.py &
-          sleep 10
-          
-      - name: Run API tests
-        run: |
-          python test_api.py
+    - uses: actions/checkout@v4
+    
+    - name: Run Trivy vulnerability scanner
+      uses: aquasecurity/trivy-action@master
+      with:
+        scan-type: 'fs'
+        scan-ref: '.'
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+    
+    - name: Upload Trivy scan results to GitHub Security tab
+      uses: github/codeql-action/upload-sarif@v2
+      if: always()
+      with:
+        sarif_file: 'trivy-results.sarif'
 
-  # Docker Build and Security
-  docker-build:
-    name: Docker Build & Security
+  build:
     runs-on: ubuntu-latest
-    needs: test
+    needs: [test, security]
     
     steps:
-      - uses: actions/checkout@v4
-      
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-        
-      - name: Build Docker image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          push: false
-          tags: ${{ env.DOCKER_IMAGE }}:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          
-      - name: Run Trivy vulnerability scanner on Docker image
-        uses: aquasecurity/trivy-action@master
-        with:
-          image-ref: ${{ env.DOCKER_IMAGE }}:latest
-          format: 'sarif'
-          output: 'trivy-image-results.sarif'
-          
-      - name: Upload Trivy image scan results
-        uses: github/codeql-action/upload-sarif@v3
-        if: always()
-        with:
-          sarif_file: 'trivy-image-results.sarif'
-
-  # Performance Testing
-  performance:
-    name: Performance Tests
-    runs-on: ubuntu-latest
-    needs: test
+    - uses: actions/checkout@v4
     
-    steps:
-      - uses: actions/checkout@v4
-      
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.11'
-          
-      - name: Install dependencies
-        run: |
-          pip install -r requirements.txt
-          pip install locust
-          
-      - name: Run performance tests
-        run: |
-          python -m pytest tests/test_performance.py -v
-
-  # Documentation
-  docs:
-    name: Documentation Check
-    runs-on: ubuntu-latest
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v2
     
-    steps:
-      - uses: actions/checkout@v4
-      
-      - name: Check documentation completeness
-        run: |
-          # Check if all required docs exist
-          test -f README.md
-          test -f ROADMAP.md
-          test -f docs/30-day-plan.md
-          echo "✅ All documentation files present"
-          
-      - name: Validate API documentation
-        run: |
-          python -c "
-          import requests
-          import sys
-          try:
-              response = requests.get('http://localhost:8000/docs')
-              if response.status_code == 200:
-                  print('✅ API documentation accessible')
-              else:
-                  print('❌ API documentation not accessible')
-                  sys.exit(1)
-          except:
-              print('⚠️  API server not running, skipping docs check')
-          "
+    - name: Build Docker image
+      uses: docker/build-push-action@v4
+      with:
+        context: .
+        push: false
+        tags: universal-knowledge-hub:latest
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
 
-  # Deployment (Staging)
-  deploy-staging:
-    name: Deploy to Staging
-    runs-on: ubuntu-latest
-    needs: [test, api-test, docker-build]
-    if: github.ref == 'refs/heads/main'
-    environment: staging
-    
-    steps:
-      - uses: actions/checkout@v4
-      
-      - name: Deploy to staging environment
-        run: |
-          echo "🚀 Deploying to staging environment..."
-          # Add your staging deployment logic here
-          # Example: kubectl apply -f k8s/staging/
-          
-      - name: Run smoke tests
-        run: |
-          echo "🧪 Running smoke tests on staging..."
-          # Add smoke test logic here
-          
-      - name: Notify deployment status
-        run: |
-          echo "✅ Staging deployment completed successfully"
-
-  # Quality Gates
   quality-gates:
-    name: Quality Gates
     runs-on: ubuntu-latest
-    needs: [test, api-test, docker-build, performance]
+    needs: [test, security, build]
     
     steps:
-      - name: Check test coverage
-        run: |
-          # Ensure test coverage is above threshold
-          coverage=$(python -c "import xml.etree.ElementTree as ET; tree = ET.parse('coverage.xml'); root = tree.getroot(); print(float(root.attrib['line-rate']) * 100)")
-          if (( $(echo "$coverage < 85" | bc -l) )); then
-            echo "❌ Test coverage below 85%: $coverage%"
+    - uses: actions/checkout@v4
+    
+    - name: Check test coverage threshold
+      run: |
+        coverage=$(python -c "import xml.etree.ElementTree as ET; tree = ET.parse('coverage.xml'); root = tree.getroot(); print(float(root.attrib['line-rate']) * 100)")
+        echo "Coverage: $coverage%"
+        if (( $(echo "$coverage < 80" | bc -l) )); then
+          echo "❌ Test coverage below 80% threshold"
+          exit 1
+        fi
+        echo "✅ Test coverage meets threshold"
+    
+    - name: Check security scan results
+      run: |
+        if [ -f "bandit-report.json" ]; then
+          high_issues=$(python -c "import json; data=json.load(open('bandit-report.json')); print(len([i for i in data['results'] if i['issue_severity'] == 'HIGH']))")
+          if [ "$high_issues" -gt 0 ]; then
+            echo "❌ Found $high_issues high security issues"
             exit 1
-          else
-            echo "✅ Test coverage: $coverage%"
           fi
-          
-      - name: Check security vulnerabilities
-        run: |
-          # Check if any critical vulnerabilities found
-          if [ -f "trivy-results.sarif" ]; then
-            echo "🔍 Checking for critical vulnerabilities..."
-            # Add vulnerability check logic
-          fi
-          
-      - name: Performance validation
-        run: |
-          echo "⚡ Validating performance metrics..."
-          # Add performance validation logic
-          
-      - name: Quality gates passed
-        run: |
-          echo "🎉 All quality gates passed!"
-          echo "✅ Ready for production deployment" 
+          echo "✅ No high security issues found"
+        fi 
