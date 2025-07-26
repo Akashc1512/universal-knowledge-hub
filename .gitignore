@@ -1,0 +1,14 @@
+# Ignore virtual environments
+venv/
+.venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+.env/
+.venv/
+# Common Python ignores (optional additions)
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
