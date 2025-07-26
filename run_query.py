@@ -85,13 +85,15 @@ async def test_individual_agents():
     logger.info(f"FactCheckAgent: Verified {len(factcheck_result)} claims")
     
     # Test SynthesisAgent
+    from agents.base_agent import QueryContext
     synthesis_agent = SynthesisAgent()
+    test_context = QueryContext(query="What is quantum computing?")
     synthesis_result = await synthesis_agent.synthesize(
         factcheck_result, 
-        None, 
+        test_context, 
         {"style": "concise"}
     )
-    logger.info(f"SynthesisAgent: Generated answer with confidence {synthesis_result.get('verified_claims', 0)} verified claims")
+    logger.info(f"SynthesisAgent: Generated answer with {synthesis_result.get('verified_claims', 0)} verified claims")
     
     # Test CitationAgent
     citation_agent = CitationAgent()
