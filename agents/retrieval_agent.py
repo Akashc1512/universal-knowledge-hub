@@ -18,6 +18,7 @@ import numpy as np
 from functools import lru_cache
 import aiohttp
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from core.types import Document
 
 
 # agents/retrieval_agent.py
@@ -26,9 +27,9 @@ class RetrievalAgent:
     def __init__(self):
         pass
 
-    def retrieve(self, query):
-        # Do retrieval work here
-        return "retrieved_data"
+    def retrieve(self, query: str) -> List[Document]:
+        """Synchronously retrieve top results for a query."""
+        return asyncio.run(self.hybrid_retrieve(query=query, entities=[]))
 
 
 # Configure logging
@@ -980,13 +981,7 @@ async def main():
 
 
 if __name__ == "__main__":
-    # Run example
-    asyncio.run(main())
-
-
-
-if __name__ == "__main__":
-    import asyncio
-    agent = RetrievalAgent(config={})
-    results = asyncio.run(agent.vector_search("AI in healthcare", top_k=3))
-    print([doc.content for doc in results.documents])
+    agent = RetrievalAgent()
+    results = agent.retrieve("What is the capital of France?")
+    for doc in results:
+        print(doc.content)
