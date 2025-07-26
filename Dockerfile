@@ -1,6 +1,6 @@
 # Universal Knowledge Platform Dockerfile
 
-FROM python:3.9-slim
+FROM python:3.10-slim
 
 # Set working directory
 WORKDIR /app
@@ -32,5 +32,3 @@ ENV PYTHONUNBUFFERED=1
 # Expose port for future API
 EXPOSE 8000
 
-# Default command - run a test query
-CMD ["python", "run_query.py", "What is the capital of France?"] 
