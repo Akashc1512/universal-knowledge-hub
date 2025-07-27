@@ -1,0 +1,52 @@
+# Universal Knowledge Platform - Terraform Variables Example
+# Copy this file to terraform.tfvars and modify as needed
+
+# AWS Configuration
+aws_region = "us-east-1"
+environment = "dev"  # dev, staging, prod
+
+# Project Configuration
+project_name = "universal-knowledge-hub"
+cluster_name = "universal-knowledge-hub-cluster"
+
+# Kubernetes Configuration
+kubernetes_version = "1.28"
+
+# Network Configuration
+vpc_cidr = "10.0.0.0/16"
+availability_zones = ["us-east-1a", "us-east-1b", "us-east-1c"]
+private_subnet_cidrs = ["10.0.1.0/24", "10.0.2.0/24", "10.0.3.0/24"]
+public_subnet_cidrs = ["10.0.101.0/24", "10.0.102.0/24", "10.0.103.0/24"]
+
+# Domain Configuration (optional)
+domain_name = ""  # e.g., "api.yourdomain.com"
+certificate_arn = ""  # SSL certificate ARN if using custom domain
+
+# Feature Flags
+enable_monitoring = true
+enable_logging = true
+
+# Node Groups Configuration
+node_groups = {
+  general = {
+    desired_capacity = 2
+    min_capacity     = 1
+    max_capacity     = 5
+    instance_types   = ["t3.medium", "t3.large"]
+    capacity_type    = "ON_DEMAND"
+  }
+  monitoring = {
+    desired_capacity = 1
+    min_capacity     = 1
+    max_capacity     = 3
+    instance_types   = ["t3.small"]
+    capacity_type    = "ON_DEMAND"
+  }
+}
+
+# Additional Tags
+tags = {
+  Owner       = "DevOps Team"
+  CostCenter  = "Engineering"
+  Environment = "dev"
+} 

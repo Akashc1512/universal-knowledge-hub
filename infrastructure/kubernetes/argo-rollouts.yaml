@@ -1,0 +1,145 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: knowledge-hub-rollout
+  namespace: knowledge-hub
+  labels:
+    app: knowledge-hub
+    version: v1.0.0
+spec:
+  replicas: 10
+  strategy:
+    blueGreen:
+      activeService: knowledge-hub-active
+      previewService: knowledge-hub-preview
+      autoPromotionEnabled: false
+      scaleDownDelaySeconds: 30
+      prePromotionAnalysis:
+        templates:
+        - templateName: success-rate
+        args:
+        - name: service-name
+          value: knowledge-hub-preview
+        - name: success-rate
+          value: "95"
+        - name: minimum-count
+          value: "5"
+      postPromotionAnalysis:
+        templates:
+        - templateName: success-rate
+        args:
+        - name: service-name
+          value: knowledge-hub-active
+        - name: success-rate
+          value: "95"
+        - name: minimum-count
+          value: "5"
+      autoPromotionEnabled: false
+      scaleDownDelaySeconds: 30
+  selector:
+    matchLabels:
+      app: knowledge-hub
+  template:
+    metadata:
+      labels:
+        app: knowledge-hub
+        version: v1.0.0
+    spec:
+      containers:
+      - name: knowledge-hub-api
+        image: knowledge-hub/api:latest
+        ports:
+        - containerPort: 8000
+        env:
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: knowledge-hub-secrets
+              key: database-url
+        - name: REDIS_URL
+          valueFrom:
+            secretKeyRef:
+              name: knowledge-hub-secrets
+              key: redis-url
+        - name: ELASTICSEARCH_URL
+          valueFrom:
+            secretKeyRef:
+              name: knowledge-hub-secrets
+              key: elasticsearch-url
+        - name: VAULT_ADDR
+          value: "http://vault.knowledge-hub.svc.cluster.local:8200"
+        - name: VAULT_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: vault-token
+              key: token
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      - name: knowledge-hub-frontend
+        image: knowledge-hub/frontend:latest
+        ports:
+        - containerPort: 3000
+        env:
+        - name: REACT_APP_API_URL
+          value: "http://knowledge-hub-api:8000"
+        - name: REACT_APP_VAULT_ADDR
+          value: "http://vault.knowledge-hub.svc.cluster.local:8200"
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "200m"
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 3000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 3000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+---
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: success-rate
+  namespace: knowledge-hub
+spec:
+  args:
+  - name: service-name
+  - name: success-rate
+  - name: minimum-count
+  metrics:
+  - name: success-rate
+    interval: 60s
+    count: 5
+    successCondition: result[0] >= {{args.success-rate}}
+    failureCondition: result[0] < {{args.success-rate}}
+    provider:
+      prometheus:
+        address: http://prometheus.monitoring.svc.cluster.local:9090
+        query: |
+          sum(rate(http_requests_total{service="{{args.service-name}}", status!~"5.."}[5m])) /
+          sum(rate(http_requests_total{service="{{args.service-name}}"}[5m])) * 100 

@@ -9,8 +9,13 @@ from enum import Enum
 import asyncio
 import time
 import logging
+import os
 from collections import defaultdict
 import uuid
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +64,7 @@ class AgentMessage:
         'recipient_agent': None,
         'message_type': MessageType.TASK,
         'priority': TaskPriority.MEDIUM.value,
-        'ttl': 30000,  # milliseconds
+        'ttl': int(os.getenv('MESSAGE_TTL_MS', '30000')),  # milliseconds
         'retry_count': 0,
         'trace_id': None
     })
@@ -80,8 +85,8 @@ class QueryContext:
     session_id: Optional[str] = None
     domains: List[str] = field(default_factory=list)
     complexity_score: float = 0.0
-    token_budget: int = 1000
-    timeout_ms: int = 5000
+    token_budget: int = int(os.getenv('DEFAULT_TOKEN_BUDGET', '1000'))
+    timeout_ms: int = int(os.getenv('AGENT_TIMEOUT_MS', '5000'))
     user_context: Optional[Dict[str, Any]] = field(default_factory=dict)
     metadata: Dict[str, Any] = field(default_factory=dict)
 

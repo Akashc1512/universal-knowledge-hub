@@ -12,6 +12,10 @@ from contextlib import asynccontextmanager
 from collections import defaultdict
 import asyncio
 from datetime import datetime, timedelta
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Import advanced features
 from api.cache import get_cached_result, cache_result, get_cache_stats

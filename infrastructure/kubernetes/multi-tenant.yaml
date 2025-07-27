@@ -1,0 +1,227 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: knowledge-hub-tenant-1
+  labels:
+    tenant: tenant-1
+    environment: production
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: knowledge-hub-tenant-2
+  labels:
+    tenant: tenant-2
+    environment: production
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: tenant-1-quota
+  namespace: knowledge-hub-tenant-1
+spec:
+  hard:
+    requests.cpu: "4"
+    requests.memory: 8Gi
+    limits.cpu: "8"
+    limits.memory: 16Gi
+    requests.storage: 100Gi
+    persistentvolumeclaims: "10"
+    services: "20"
+    pods: "20"
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: tenant-2-quota
+  namespace: knowledge-hub-tenant-2
+spec:
+  hard:
+    requests.cpu: "8"
+    requests.memory: 16Gi
+    limits.cpu: "16"
+    limits.memory: 32Gi
+    requests.storage: 200Gi
+    persistentvolumeclaims: "20"
+    services: "40"
+    pods: "40"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: tenant-1-role
+  namespace: knowledge-hub-tenant-1
+rules:
+- apiGroups: [""]
+  resources: ["pods", "services", "configmaps", "secrets"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["apps"]
+  resources: ["deployments", "statefulsets"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: tenant-2-role
+  namespace: knowledge-hub-tenant-2
+rules:
+- apiGroups: [""]
+  resources: ["pods", "services", "configmaps", "secrets"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["apps"]
+  resources: ["deployments", "statefulsets"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: tenant-1-binding
+  namespace: knowledge-hub-tenant-1
+subjects:
+- kind: ServiceAccount
+  name: tenant-1-sa
+  namespace: knowledge-hub-tenant-1
+roleRef:
+  kind: Role
+  name: tenant-1-role
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: tenant-2-binding
+  namespace: knowledge-hub-tenant-2
+subjects:
+- kind: ServiceAccount
+  name: tenant-2-sa
+  namespace: knowledge-hub-tenant-2
+roleRef:
+  kind: Role
+  name: tenant-2-role
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: tenant-1-sa
+  namespace: knowledge-hub-tenant-1
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: tenant-2-sa
+  namespace: knowledge-hub-tenant-2
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: tenant-1-network-policy
+  namespace: knowledge-hub-tenant-1
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          tenant: tenant-1
+    ports:
+    - protocol: TCP
+      port: 8000
+    - protocol: TCP
+      port: 3000
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+    ports:
+    - protocol: TCP
+      port: 53
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: monitoring
+    ports:
+    - protocol: TCP
+      port: 9090
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: tenant-2-network-policy
+  namespace: knowledge-hub-tenant-2
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          tenant: tenant-2
+    ports:
+    - protocol: TCP
+      port: 8000
+    - protocol: TCP
+      port: 3000
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+    ports:
+    - protocol: TCP
+      port: 53
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: monitoring
+    ports:
+    - protocol: TCP
+      port: 9090
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tenant-1-config
+  namespace: knowledge-hub-tenant-1
+data:
+  tenant_id: "tenant-1"
+  tenant_name: "Enterprise Customer 1"
+  database_schema: "tenant_1"
+  elasticsearch_index: "knowledge-hub-tenant-1"
+  redis_db: "1"
+  features: |
+    {
+      "ai_recommendations": true,
+      "advanced_search": true,
+      "real_time_analytics": true,
+      "multi_tenant": true,
+      "enterprise_integrations": true,
+      "advanced_security": true
+    }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tenant-2-config
+  namespace: knowledge-hub-tenant-2
+data:
+  tenant_id: "tenant-2"
+  tenant_name: "Enterprise Customer 2"
+  database_schema: "tenant_2"
+  elasticsearch_index: "knowledge-hub-tenant-2"
+  redis_db: "2"
+  features: |
+    {
+      "ai_recommendations": true,
+      "advanced_search": true,
+      "real_time_analytics": true,
+      "multi_tenant": true,
+      "enterprise_integrations": true,
+      "advanced_security": true
+    } 

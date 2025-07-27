@@ -1,0 +1,51 @@
+2025-07-27 06:37:36,380 - __main__ - INFO - 🚀 Starting Universal Knowledge Platform API Server
+2025-07-27 06:37:36,382 - __main__ - INFO - 📍 Host: 0.0.0.0
+2025-07-27 06:37:36,382 - __main__ - INFO - 🔌 Port: 8002
+2025-07-27 06:37:36,382 - __main__ - INFO - 🔄 Reload: False
+2025-07-27 06:37:36,383 - __main__ - INFO - ✅ Port 8002 is available
+INFO:     Started server process [63446]
+INFO:     Waiting for application startup.
+2025-07-27 06:37:39,809 - api.main - INFO - 🚀 Starting Universal Knowledge Platform
+2025-07-27 06:37:44,100 - api.main - INFO - ✅ Universal Knowledge Platform initialized successfully
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8002 (Press CTRL+C to quit)
+2025-07-27 06:37:50,903 - api.main - INFO - Request: GET / from 127.0.0.1
+2025-07-27 06:37:50,958 - api.main - INFO - Response: 200 took 0.055s
+INFO:     127.0.0.1:58652 - "GET / HTTP/1.1" 200 OK
+2025-07-27 06:40:55,441 - api.main - INFO - Request: GET /health from 127.0.0.1
+2025-07-27 06:40:55,465 - api.main - INFO - Response: 200 took 0.025s
+INFO:     127.0.0.1:34332 - "GET /health HTTP/1.1" 200 OK
+2025-07-27 06:41:02,080 - api.main - INFO - Request: GET /health from 127.0.0.1
+2025-07-27 06:41:02,082 - api.main - INFO - Response: 200 took 0.002s
+INFO:     127.0.0.1:37896 - "GET /health HTTP/1.1" 200 OK
+2025-07-27 06:41:07,959 - api.main - INFO - Request: GET / from 127.0.0.1
+2025-07-27 06:41:07,961 - api.main - INFO - Response: 200 took 0.002s
+INFO:     127.0.0.1:43702 - "GET / HTTP/1.1" 200 OK
+2025-07-27 06:41:07,994 - api.main - INFO - Request: GET /agents from 127.0.0.1
+2025-07-27 06:41:07,999 - api.main - INFO - Response: 200 took 0.005s
+INFO:     127.0.0.1:43716 - "GET /agents HTTP/1.1" 200 OK
+2025-07-27 06:41:14,126 - api.main - INFO - Request: GET /metrics from 127.0.0.1
+2025-07-27 06:41:14,130 - api.main - INFO - Response: 200 took 0.004s
+INFO:     127.0.0.1:43724 - "GET /metrics HTTP/1.1" 200 OK
+2025-07-27 06:41:14,167 - api.main - INFO - Request: GET /analytics from 127.0.0.1
+2025-07-27 06:41:14,175 - api.main - INFO - Response: 200 took 0.008s
+INFO:     127.0.0.1:43730 - "GET /analytics HTTP/1.1" 200 OK
+2025-07-27 06:41:20,909 - api.main - INFO - Request: GET /cache/stats from 127.0.0.1
+2025-07-27 06:41:20,911 - api.main - INFO - Response: 200 took 0.002s
+INFO:     127.0.0.1:44280 - "GET /cache/stats HTTP/1.1" 200 OK
+2025-07-27 06:41:20,946 - api.main - INFO - Request: GET /security from 127.0.0.1
+2025-07-27 06:41:20,950 - api.main - INFO - Response: 200 took 0.004s
+INFO:     127.0.0.1:44292 - "GET /security HTTP/1.1" 200 OK
+2025-07-27 06:41:27,057 - api.main - INFO - Request: POST /query from 127.0.0.1
+2025-07-27 06:41:27,141 - api.cache - INFO - Cache MISS: What is artificial intelligence?...
+2025-07-27 06:41:27,146 - agents.lead_orchestrator - WARNING - [TOKEN] AgentType.RETRIEVAL exceeded budget (323 > 96) - simulating truncation.
+2025-07-27 06:41:27,147 - agents.lead_orchestrator - ERROR - AgentType.RETRIEVAL failed: Token budget exceeded for AgentType.RETRIEVAL
+2025-07-27 06:41:27,148 - agents.lead_orchestrator - WARNING - [TOKEN] AgentType.FACT_CHECK exceeded budget (351 > 128) - simulating truncation.
+2025-07-27 06:41:27,148 - agents.lead_orchestrator - ERROR - AgentType.FACT_CHECK failed: Token budget exceeded for AgentType.FACT_CHECK
+2025-07-27 06:41:27,350 - agents.lead_orchestrator - WARNING - [TOKEN] AgentType.CITATION exceeded budget (326 > 64) - simulating truncation.
+2025-07-27 06:41:27,351 - agents.lead_orchestrator - ERROR - AgentType.CITATION failed: Token budget exceeded for AgentType.CITATION
+2025-07-27 06:41:27,351 - agents.lead_orchestrator - INFO - [TOKEN] Total tokens used for query: 1108
+2025-07-27 06:41:27,352 - agents.lead_orchestrator - INFO - [TOKEN] Per-agent usage: {<AgentType.RETRIEVAL: 'retrieval'>: 323, <AgentType.FACT_CHECK: 'fact_check'>: 351, <AgentType.SYNTHESIS: 'synthesis'>: 108, <AgentType.CITATION: 'citation'>: 326}
+2025-07-27 06:41:27,355 - api.cache - INFO - Cached result for: What is artificial intelligence?...
+2025-07-27 06:41:27,358 - api.main - INFO - Response: 200 took 0.302s
+INFO:     127.0.0.1:47106 - "POST /query HTTP/1.1" 200 OK

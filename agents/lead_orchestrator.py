@@ -8,6 +8,7 @@ for intelligent knowledge retrieval, verification, synthesis, and citation.
 import asyncio
 import uuid
 import time
+import os
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any, Union, Tuple
 from dataclasses import dataclass, field
@@ -16,6 +17,10 @@ from abc import ABC, abstractmethod
 import logging
 from collections import defaultdict
 from functools import lru_cache
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 # Import from base_agent to avoid duplication
 from agents.base_agent import QueryContext, AgentResult, AgentMessage, MessageType, TaskPriority, AgentType, BaseAgent
@@ -1109,8 +1114,8 @@ class TokenBudgetController:
     - Track historical usage patterns
     """
     
-    def __init__(self, daily_budget: int = 1_000_000):
-        self.daily_budget = daily_budget
+    def __init__(self, daily_budget: int = None):
+        self.daily_budget = daily_budget or int(os.getenv('DAILY_TOKEN_BUDGET', '1000000'))
         self.used_today = 0
         self.agent_allocations = {
             AgentType.RETRIEVAL: 0.15,
@@ -1156,11 +1161,11 @@ class SemanticCacheManager:
     - Implement distributed caching
     """
     
-    def __init__(self, similarity_threshold: float = 0.95):
+    def __init__(self, similarity_threshold: float = None):
         self.cache = {}
         self.embeddings = {}
-        self.similarity_threshold = similarity_threshold
-        self.max_cache_size = 10000
+        self.similarity_threshold = similarity_threshold or float(os.getenv('CACHE_SIMILARITY_THRESHOLD', '0.95'))
+        self.max_cache_size = int(os.getenv('MAX_CACHE_SIZE', '10000'))
     
     async def get_cached_response(self, query: str) -> Optional[Dict[str, Any]]:
         """

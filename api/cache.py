@@ -6,12 +6,17 @@ Provides intelligent caching for queries, results, and metadata.
 import hashlib
 import json
 import time
+import os
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass, asdict
 from datetime import datetime, timedelta
 import logging
 from collections import OrderedDict
 import asyncio
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 
@@ -119,10 +124,10 @@ class QueryCache:
     def __init__(self, max_size: int = 500):
         self.cache = LRUCache(max_size)
         self.query_patterns = {
-            'factual': 1800,  # 30 minutes
-            'analytical': 3600,  # 1 hour
-            'creative': 7200,  # 2 hours
-            'default': 3600  # 1 hour
+            'factual': int(os.getenv('FACTUAL_QUERY_TTL', '1800')),  # 30 minutes
+            'analytical': int(os.getenv('ANALYTICAL_QUERY_TTL', '3600')),  # 1 hour
+            'creative': int(os.getenv('CREATIVE_QUERY_TTL', '7200')),  # 2 hours
+            'default': int(os.getenv('DEFAULT_QUERY_TTL', '3600'))  # 1 hour
         }
     
     def _generate_key(self, query: str, user_context: Dict[str, Any] = None) -> str:
@@ -228,7 +233,7 @@ class SemanticCache:
     def put(self, query: str, result: Dict[str, Any], user_context: Dict[str, Any] = None) -> None:
         """Cache query with semantic metadata."""
         key = hashlib.md5(query.encode()).hexdigest()
-        ttl = 3600  # 1 hour default
+        ttl = int(os.getenv('SEMANTIC_QUERY_TTL', '3600'))  # 1 hour default
         
         metadata = {
             'original_query': query,

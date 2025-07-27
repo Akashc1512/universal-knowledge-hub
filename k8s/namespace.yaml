@@ -1,8 +1,0 @@
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: universal-knowledge-platform
-  labels:
-    name: universal-knowledge-platform
-    environment: production
-    managed-by: terraform 

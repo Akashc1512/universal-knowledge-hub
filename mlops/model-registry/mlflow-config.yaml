@@ -1,0 +1,266 @@
+# MLflow Configuration for Universal Knowledge Platform
+# Enterprise-grade model registry and experiment tracking
+
+mlflow:
+  # MLflow Server Configuration
+  server:
+    host: "0.0.0.0"
+    port: 5000
+    workers: 4
+    timeout: 300
+    
+  # Database Configuration
+  database:
+    backend_store_uri: "postgresql://mlflow:mlflow@mlflow-db:5432/mlflow"
+    default_artifact_root: "s3://ukp-mlflow-artifacts"
+    
+  # S3 Artifact Store Configuration
+  artifacts:
+    s3_bucket: "ukp-mlflow-artifacts"
+    s3_endpoint_url: "https://s3.amazonaws.com"
+    aws_access_key_id: "${AWS_ACCESS_KEY_ID}"
+    aws_secret_access_key: "${AWS_SECRET_ACCESS_KEY}"
+    aws_region: "us-east-1"
+
+# Model Registry Configuration
+model_registry:
+  # Model Versioning
+  versioning:
+    auto_version: true
+    version_format: "v{major}.{minor}.{patch}"
+    
+  # Model Validation
+  validation:
+    enabled: true
+    schema_validation: true
+    data_drift_detection: true
+    performance_threshold: 0.8
+    
+  # Model Deployment
+  deployment:
+    auto_deploy: false
+    staging_environment: "staging"
+    production_environment: "production"
+    rollback_enabled: true
+    
+  # Model Monitoring
+  monitoring:
+    enabled: true
+    metrics_collection: true
+    alerting: true
+    drift_detection: true
+
+# Experiment Tracking Configuration
+experiments:
+  # Default Experiment Settings
+  default:
+    name: "ukp-experiments"
+    description: "Universal Knowledge Platform ML Experiments"
+    
+  # Experiment Categories
+  categories:
+    - name: "retrieval-models"
+      description: "Document retrieval and search models"
+    - name: "synthesis-models"
+      description: "Answer synthesis and generation models"
+    - name: "fact-checking-models"
+      description: "Fact verification and validation models"
+    - name: "embedding-models"
+      description: "Vector embedding models"
+    - name: "classification-models"
+      description: "Query classification and routing models"
+
+# Model Training Configuration
+training:
+  # Training Pipeline
+  pipeline:
+    name: "ukp-training-pipeline"
+    version: "1.0.0"
+    
+  # Hyperparameter Tuning
+  hyperparameter_tuning:
+    enabled: true
+    method: "optuna"
+    max_trials: 100
+    timeout_hours: 24
+    
+  # Model Evaluation
+  evaluation:
+    metrics:
+      - "accuracy"
+      - "precision"
+      - "recall"
+      - "f1_score"
+      - "custom_metric"
+    cross_validation: true
+    test_size: 0.2
+    
+  # Model Packaging
+  packaging:
+    format: "onnx"
+    include_dependencies: true
+    optimize_for_inference: true
+
+# Model Serving Configuration
+serving:
+  # TensorFlow Serving
+  tensorflow_serving:
+    enabled: true
+    port: 8500
+    grpc_port: 8501
+    model_config_file: "/models/models.config"
+    
+  # ONNX Runtime
+  onnx_runtime:
+    enabled: true
+    optimization_level: 1
+    
+  # Custom Serving
+  custom_serving:
+    enabled: true
+    framework: "fastapi"
+    port: 8000
+
+# A/B Testing Configuration
+ab_testing:
+  enabled: true
+  framework: "mlflow"
+  
+  # Traffic Splitting
+  traffic_splitting:
+    method: "weighted_random"
+    default_split: 0.5
+    
+  # Experiment Design
+  experiment_design:
+    statistical_significance: 0.05
+    power: 0.8
+    minimum_sample_size: 1000
+    
+  # Metrics for A/B Testing
+  metrics:
+    primary:
+      - "response_time"
+      - "accuracy"
+      - "user_satisfaction"
+    secondary:
+      - "throughput"
+      - "error_rate"
+      - "cost_per_request"
+
+# Model Monitoring Configuration
+monitoring:
+  # Performance Monitoring
+  performance:
+    enabled: true
+    metrics:
+      - "latency"
+      - "throughput"
+      - "error_rate"
+      - "cpu_usage"
+      - "memory_usage"
+    alerting:
+      latency_threshold: 200  # ms
+      error_rate_threshold: 0.01
+      cpu_threshold: 0.8
+      memory_threshold: 0.8
+      
+  # Data Drift Detection
+  data_drift:
+    enabled: true
+    methods:
+      - "statistical_test"
+      - "distribution_comparison"
+      - "feature_drift"
+    alerting:
+      drift_threshold: 0.1
+      
+  # Model Drift Detection
+  model_drift:
+    enabled: true
+    methods:
+      - "performance_degradation"
+      - "prediction_drift"
+      - "concept_drift"
+    alerting:
+      performance_threshold: 0.05
+      prediction_threshold: 0.1
+
+# Security Configuration
+security:
+  # Authentication
+  authentication:
+    enabled: true
+    method: "oauth2"
+    provider: "azure_ad"
+    
+  # Authorization
+  authorization:
+    enabled: true
+    rbac_enabled: true
+    roles:
+      - "ml_engineer"
+      - "data_scientist"
+      - "ml_ops_engineer"
+      - "admin"
+      
+  # Data Protection
+  data_protection:
+    encryption_at_rest: true
+    encryption_in_transit: true
+    data_masking: true
+    audit_logging: true
+
+# Integration Configuration
+integrations:
+  # CI/CD Integration
+  cicd:
+    github_actions: true
+    jenkins: false
+    gitlab_ci: false
+    
+  # Monitoring Integration
+  monitoring:
+    prometheus: true
+    grafana: true
+    datadog: false
+    new_relic: false
+    
+  # Alerting Integration
+  alerting:
+    pagerduty: true
+    slack: true
+    email: true
+    
+  # Storage Integration
+  storage:
+    s3: true
+    azure_blob: false
+    gcs: false
+    
+  # Database Integration
+  database:
+    postgresql: true
+    mysql: false
+    sqlite: false
+
+# Backup and Recovery
+backup:
+  enabled: true
+  schedule: "0 2 * * *"  # Daily at 2 AM
+  retention_days: 30
+  storage:
+    type: "s3"
+    bucket: "ukp-mlflow-backups"
+    
+# Logging Configuration
+logging:
+  level: "INFO"
+  format: "json"
+  output:
+    - "file"
+    - "stdout"
+  file:
+    path: "/var/log/mlflow"
+    max_size: "100MB"
+    max_files: 10 

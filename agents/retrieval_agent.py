@@ -10,6 +10,7 @@ import hashlib
 import json
 import logging
 import time
+import os
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any, Tuple, Set
 from dataclasses import dataclass, field
@@ -18,8 +19,11 @@ import numpy as np
 from functools import lru_cache
 import aiohttp
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
-from core.types import Document
 from agents.base_agent import AgentResult  # Add import for AgentResult
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -339,23 +343,23 @@ class RetrievalAgent:
     def _default_config(self) -> Dict[str, Any]:
         """Default configuration for the retrieval agent."""
         return {
-            'max_retries': 3,
-            'timeout': 30,
-            'cache_similarity_threshold': 0.92,
+            'max_retries': int(os.getenv('MAX_RETRIES', '3')),
+            'timeout': int(os.getenv('REQUEST_TIMEOUT', '30')),
+            'cache_similarity_threshold': float(os.getenv('CACHE_SIMILARITY_THRESHOLD', '0.92')),
             'vector_db': {
-                'host': 'localhost',
-                'port': 6333,
-                'collection': 'knowledge_base'
+                'host': os.getenv('VECTOR_DB_HOST', 'localhost'),
+                'port': int(os.getenv('VECTOR_DB_PORT', '6333')),
+                'collection': os.getenv('VECTOR_DB_COLLECTION', 'knowledge_base')
             },
             'elasticsearch': {
-                'host': 'localhost',
-                'port': 9200,
-                'index': 'knowledge_base'
+                'host': os.getenv('ELASTICSEARCH_HOST', 'localhost'),
+                'port': int(os.getenv('ELASTICSEARCH_PORT', '9200')),
+                'index': os.getenv('ELASTICSEARCH_INDEX', 'knowledge_base')
             },
             'knowledge_graph': {
-                'endpoint': 'http://localhost:7200/repositories/knowledge_base',
-                'username': '',
-                'password': ''
+                'endpoint': os.getenv('KNOWLEDGE_GRAPH_ENDPOINT', 'http://localhost:7200/repositories/knowledge_base'),
+                'username': os.getenv('KNOWLEDGE_GRAPH_USERNAME', ''),
+                'password': os.getenv('KNOWLEDGE_GRAPH_PASSWORD', '')
             }
         }
     

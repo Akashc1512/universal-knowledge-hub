@@ -181,7 +181,7 @@ asyncio.run(test_retrieval())
 ### 📋 Planned (Next Iterations)
 - [ ] Expert review workflow and UI
 - [ ] FastAPI web service
-- [ ] React frontend
+- [x] ~~React frontend~~ (Removed - backend-only project)
 - [ ] Advanced query intelligence (NLU pipeline)
 - [ ] Performance monitoring and logging
 - [ ] Cloud deployment (AWS, Azure)
