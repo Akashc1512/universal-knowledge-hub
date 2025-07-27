@@ -14,8 +14,13 @@ import logging
 from collections import defaultdict, deque
 import ipaddress
 import threading
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 
 logger = logging.getLogger(__name__)
+
+# Global thread pool for CPU-intensive operations
+_security_thread_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="security")
 
 
 @dataclass
@@ -71,46 +76,102 @@ class ThreatDetector:
             'last_seen': 0
         })
     
-    def analyze_query(self, query: str, source_ip: str) -> Tuple[bool, Dict[str, Any]]:
-        """Analyze query for security threats."""
+    def _analyze_query_sync(self, query: str, source_ip: str) -> Tuple[bool, Dict[str, Any]]:
+        """Synchronous version of query analysis for thread pool execution."""
         threats = []
         total_score = 0
+        false_positive_indicators = []
+        
+        # Check for legitimate educational/technical content that might trigger false positives
+        educational_patterns = [
+            r'\b(what is|how to|explain|define|describe|tutorial|example|code)\b',
+            r'\b(sql|javascript|html|css|python|java|c\+\+|php|ruby)\b',
+            r'\b(select|insert|update|delete|create|drop|alter)\s+(statement|query|command)\b',
+            r'\b(script|iframe|object|embed)\s+(tag|element|example)\b',
+            r'\b(command|shell|terminal|bash|powershell)\s+(line|prompt|example)\b'
+        ]
+        
+        # Check if query appears to be educational/technical
+        is_educational = any(re.search(pattern, query, re.IGNORECASE) for pattern in educational_patterns)
         
         for threat_type, patterns in self.suspicious_patterns.items():
             for pattern in patterns:
                 matches = re.findall(pattern, query, re.IGNORECASE)
                 if matches:
+                    # Reduce score for educational queries
+                    base_score = self._get_threat_score(threat_type)
+                    adjusted_score = base_score // 2 if is_educational else base_score
+                    
                     threats.append({
                         'type': threat_type,
                         'pattern': pattern,
                         'matches': matches,
-                        'severity': self._get_threat_severity(threat_type)
+                        'severity': self._get_threat_severity(threat_type),
+                        'adjusted_score': adjusted_score,
+                        'educational_context': is_educational
                     })
-                    total_score += self._get_threat_score(threat_type)
+                    total_score += adjusted_score
+                    
+                    # Track potential false positives
+                    if is_educational:
+                        false_positive_indicators.append({
+                            'threat_type': threat_type,
+                            'pattern': pattern,
+                            'context': 'educational_query'
+                        })
         
-        # Update IP threat score
+        # Update IP threat score with more nuanced scoring
         if total_score > 0:
-            self.suspicious_ips[source_ip]['score'] += total_score
+            # Reduce score for educational queries
+            final_score = total_score // 2 if is_educational else total_score
+            
+            self.suspicious_ips[source_ip]['score'] += final_score
             self.suspicious_ips[source_ip]['last_seen'] = time.time()
             self.suspicious_ips[source_ip]['events'].append({
                 'timestamp': time.time(),
                 'query': query,
                 'threats': threats,
-                'score': total_score
+                'score': final_score,
+                'educational_context': is_educational,
+                'false_positive_indicators': false_positive_indicators
             })
         
-        # Check if IP should be blocked
-        ip_data = self.suspicious_ips[source_ip]
-        if ip_data['score'] > 50:  # High threat threshold
-            self.blocked_ips.add(source_ip)
-            logger.warning(f"IP {source_ip} blocked due to high threat score: {ip_data['score']}")
+        # More nuanced blocking logic
+        ip_score = self.suspicious_ips[source_ip]['score']
+        is_blocked = False
+        block_reason = None
         
-        return len(threats) > 0, {
-            'threats_detected': threats,
+        # Only block if score is very high AND not educational
+        if ip_score > 100 and not is_educational:
+            self.blocked_ips.add(source_ip)
+            is_blocked = True
+            block_reason = "High threat score from non-educational queries"
+        elif ip_score > 200:  # Even educational queries can be blocked if score is very high
+            self.blocked_ips.add(source_ip)
+            is_blocked = True
+            block_reason = "Extremely high threat score"
+        
+        return total_score > 0, {
+            'threats': threats,
             'total_score': total_score,
-            'ip_threat_score': ip_data['score'],
-            'is_blocked': source_ip in self.blocked_ips
+            'adjusted_score': total_score // 2 if is_educational else total_score,
+            'ip_score': ip_score,
+            'is_blocked': is_blocked,
+            'block_reason': block_reason,
+            'educational_context': is_educational,
+            'false_positive_indicators': false_positive_indicators
         }
+    
+    async def analyze_query(self, query: str, source_ip: str) -> Tuple[bool, Dict[str, Any]]:
+        """Analyze query for security threats (non-blocking)."""
+        # Use thread pool for CPU-intensive regex operations
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            _security_thread_pool, 
+            self._analyze_query_sync, 
+            query, 
+            source_ip
+        )
     
     def _get_threat_severity(self, threat_type: str) -> str:
         """Get severity level for threat type."""
@@ -125,10 +186,10 @@ class ThreatDetector:
     def _get_threat_score(self, threat_type: str) -> int:
         """Get score for threat type."""
         score_map = {
-            'sql_injection': 20,
+            'sql_injection': 10,
             'xss_attack': 15,
-            'path_traversal': 10,
-            'command_injection': 30
+            'path_traversal': 5,
+            'command_injection': 20
         }
         return score_map.get(threat_type, 5)
     
@@ -141,112 +202,107 @@ class ThreatDetector:
         return {
             'blocked_ips': len(self.blocked_ips),
             'suspicious_ips': len(self.suspicious_ips),
-            'total_threat_score': sum(ip_data['score'] for ip_data in self.suspicious_ips.values()),
-            'recent_events': len([ip for ip, data in self.suspicious_ips.items() 
-                                if time.time() - data['last_seen'] < 3600])
+            'total_threats': sum(len(ip_data['events']) for ip_data in self.suspicious_ips.values()),
+            'threat_scores': dict(self.threat_scores)
         }
 
 
 class AnomalyDetector:
-    """Detects anomalous behavior patterns."""
+    """Detects anomalous user behavior patterns."""
     
     def __init__(self):
-        self.user_patterns = defaultdict(lambda: {
+        self.user_profiles = defaultdict(lambda: {
             'query_count': 0,
             'avg_response_time': 0.0,
-            'query_types': defaultdict(int),
-            'last_activity': 0,
+            'query_patterns': defaultdict(int),
+            'last_seen': 0,
             'suspicious_activity': 0
         })
         
         self.global_patterns = {
-            'avg_queries_per_minute': 0,
-            'avg_response_time': 0.0,
-            'unique_users_per_hour': 0
+            'avg_query_length': 0,
+            'common_terms': defaultdict(int),
+            'peak_hours': defaultdict(int)
         }
         
-        self.anomaly_thresholds = {
-            'queries_per_minute': 100,
-            'response_time_spike': 2.0,  # 2x normal
-            'unusual_query_pattern': 0.8,  # 80% similarity
-            'rapid_fire_queries': 10  # queries per second
-        }
+        self._lock = threading.Lock()
     
-    def analyze_user_behavior(self, user_id: str, query: str, response_time: float) -> Dict[str, Any]:
-        """Analyze user behavior for anomalies."""
-        current_time = time.time()
-        user_data = self.user_patterns[user_id]
-        
-        # Update user patterns
-        user_data['query_count'] += 1
-        user_data['last_activity'] = current_time
-        
-        # Update average response time
-        if user_data['query_count'] > 1:
-            old_avg = user_data['avg_response_time']
-            new_avg = (old_avg * (user_data['query_count'] - 1) + response_time) / user_data['query_count']
-            user_data['avg_response_time'] = new_avg
-        else:
-            user_data['avg_response_time'] = response_time
-        
-        # Detect anomalies
-        anomalies = []
-        
-        # Check for rapid-fire queries
-        if user_data['query_count'] > 1:
-            time_since_last = current_time - user_data['last_activity']
-            if time_since_last < 1.0 and user_data['query_count'] > self.anomaly_thresholds['rapid_fire_queries']:
-                anomalies.append({
-                    'type': 'rapid_fire_queries',
-                    'severity': 'medium',
-                    'details': f'User made {user_data["query_count"]} queries in {time_since_last:.2f}s'
-                })
-        
-        # Check for response time anomalies
-        if user_data['avg_response_time'] > self.global_patterns['avg_response_time'] * self.anomaly_thresholds['response_time_spike']:
-            anomalies.append({
-                'type': 'response_time_spike',
-                'severity': 'low',
-                'details': f'Response time {user_data["avg_response_time"]:.2f}s vs global {self.global_patterns["avg_response_time"]:.2f}s'
-            })
-        
-        # Check for unusual query patterns
-        if self._detect_unusual_pattern(query, user_data):
-            anomalies.append({
-                'type': 'unusual_query_pattern',
-                'severity': 'medium',
-                'details': f'Unusual query pattern detected'
-            })
-        
-        if anomalies:
-            user_data['suspicious_activity'] += 1
-        
-        return {
-            'anomalies_detected': anomalies,
-            'user_score': user_data['suspicious_activity'],
-            'is_suspicious': user_data['suspicious_activity'] > 3
-        }
+    def _analyze_user_behavior_sync(self, user_id: str, query: str, response_time: float) -> Dict[str, Any]:
+        """Synchronous version of user behavior analysis."""
+        with self._lock:
+            profile = self.user_profiles[user_id]
+            
+            # Update basic stats
+            profile['query_count'] += 1
+            profile['last_seen'] = time.time()
+            
+            # Update average response time
+            if profile['query_count'] == 1:
+                profile['avg_response_time'] = response_time
+            else:
+                profile['avg_response_time'] = (
+                    (profile['avg_response_time'] * (profile['query_count'] - 1) + response_time) 
+                    / profile['query_count']
+                )
+            
+            # Analyze query patterns
+            words = query.lower().split()
+            for word in words:
+                profile['query_patterns'][word] += 1
+            
+            # Detect unusual patterns
+            anomalies = []
+            
+            # Check for rapid-fire queries
+            if profile['query_count'] > 10 and response_time < 0.1:
+                anomalies.append('rapid_fire_queries')
+                profile['suspicious_activity'] += 1
+            
+            # Check for unusual query length
+            if len(query) > 1000:
+                anomalies.append('unusually_long_query')
+                profile['suspicious_activity'] += 1
+            
+            # Check for repeated patterns
+            if profile['query_patterns'][words[0] if words else ''] > 5:
+                anomalies.append('repeated_patterns')
+                profile['suspicious_activity'] += 1
+            
+            return {
+                'anomalies': anomalies,
+                'suspicious_score': profile['suspicious_activity'],
+                'profile': dict(profile)
+            }
+    
+    async def analyze_user_behavior(self, user_id: str, query: str, response_time: float) -> Dict[str, Any]:
+        """Analyze user behavior for anomalies (non-blocking)."""
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            _security_thread_pool,
+            self._analyze_user_behavior_sync,
+            user_id,
+            query,
+            response_time
+        )
     
     def _detect_unusual_pattern(self, query: str, user_data: Dict[str, Any]) -> bool:
         """Detect unusual query patterns."""
-        # Simple implementation - can be enhanced with ML
-        query_length = len(query)
-        word_count = len(query.split())
+        # Simple pattern detection
+        unusual_patterns = [
+            r'(\w)\1{5,}',  # Repeated characters
+            r'[A-Z]{10,}',  # All caps
+            r'\d{20,}',     # Long numbers
+        ]
         
-        # Check for unusually long or short queries
-        if query_length > 1000 or query_length < 5:
-            return True
-        
-        # Check for repetitive patterns
-        if user_data['query_count'] > 10:
-            # Check if this query is very similar to previous ones
-            return False  # Simplified for now
-        
+        for pattern in unusual_patterns:
+            if re.search(pattern, query):
+                return True
         return False
     
     def update_global_patterns(self, global_stats: Dict[str, Any]):
         """Update global behavior patterns."""
-        self.global_patterns.update(global_stats)
+        with self._lock:
+            self.global_patterns.update(global_stats)
 
 
 class SecurityMonitor:
@@ -256,67 +312,87 @@ class SecurityMonitor:
         self.threat_detector = ThreatDetector()
         self.anomaly_detector = AnomalyDetector()
         self.security_events = deque(maxlen=1000)
-        self.lock = threading.Lock()
-        
-        # Rate limiting for security events
-        self.event_rate_limits = {
-            'high': 10,  # events per minute
-            'medium': 50,
-            'low': 100
-        }
-        self.event_counts = defaultdict(lambda: deque(maxlen=60))
+        self._lock = threading.Lock()
     
-    def analyze_request(self, query: str, source_ip: str, user_id: Optional[str], 
+    def _analyze_request_sync(self, query: str, source_ip: str, user_id: Optional[str], 
                        response_time: float) -> Dict[str, Any]:
-        """Analyze request for security threats and anomalies."""
-        with self.lock:
+        """Synchronous version of request analysis."""
+        with self._lock:
             # Check if IP is blocked
             if self.threat_detector.is_ip_blocked(source_ip):
                 return {
                     'blocked': True,
                     'reason': 'IP blocked due to suspicious activity',
-                    'action': 'reject'
+                    'severity': 'high'
                 }
             
-            # Threat detection
-            has_threats, threat_info = self.threat_detector.analyze_query(query, source_ip)
+            # Analyze for threats
+            has_threats, threat_info = self.threat_detector._analyze_query_sync(query, source_ip)
             
-            # Anomaly detection
-            anomaly_info = self.anomaly_detector.analyze_user_behavior(user_id or 'anonymous', query, response_time)
+            # Analyze user behavior
+            user_analysis = {}
+            if user_id:
+                user_analysis = self.anomaly_detector._analyze_user_behavior_sync(user_id, query, response_time)
             
-            # Determine action
-            action = 'allow'
-            if has_threats and threat_info['total_score'] > 20:
-                action = 'block'
-            elif anomaly_info['is_suspicious']:
-                action = 'monitor'
+            # Determine overall security status
+            security_status = 'safe'
+            severity = 'low'
+            actions = []
+            
+            if has_threats:
+                security_status = 'threat_detected'
+                severity = 'high'
+                actions.append('log_threat')
+            
+            if user_analysis.get('anomalies'):
+                security_status = 'anomaly_detected'
+                severity = 'medium'
+                actions.append('log_anomaly')
+            
+            if threat_info.get('is_blocked'):
+                security_status = 'blocked'
+                severity = 'critical'
+                actions.append('block_request')
             
             # Record security event
-            if has_threats or anomaly_info['anomalies_detected']:
-                self._record_security_event(
-                    event_type='threat_detected' if has_threats else 'anomaly_detected',
-                    severity='high' if has_threats else 'medium',
-                    source_ip=source_ip,
-                    user_id=user_id,
-                    details={
-                        'threats': threat_info.get('threats_detected', []),
-                        'anomalies': anomaly_info.get('anomalies_detected', []),
-                        'query': query[:100]  # Truncate for security
-                    },
-                    action_taken=action
-                )
+            self._record_security_event_sync(
+                'request_analyzed',
+                severity,
+                source_ip,
+                user_id,
+                {
+                    'query_length': len(query),
+                    'response_time': response_time,
+                    'threats': threat_info.get('threats', []),
+                    'anomalies': user_analysis.get('anomalies', [])
+                },
+                'monitored'
+            )
             
             return {
-                'blocked': action == 'block',
-                'monitored': action == 'monitor',
-                'threats': threat_info,
-                'anomalies': anomaly_info,
-                'action': action
+                'status': security_status,
+                'severity': severity,
+                'actions': actions,
+                'threat_info': threat_info,
+                'user_analysis': user_analysis
             }
     
-    def _record_security_event(self, event_type: str, severity: str, source_ip: str,
+    async def analyze_request(self, query: str, source_ip: str, user_id: Optional[str], 
+                       response_time: float) -> Dict[str, Any]:
+        """Analyze request for security issues (non-blocking)."""
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            _security_thread_pool,
+            self._analyze_request_sync,
+            query,
+            source_ip,
+            user_id,
+            response_time
+        )
+    
+    def _record_security_event_sync(self, event_type: str, severity: str, source_ip: str,
                               user_id: Optional[str], details: Dict[str, Any], action_taken: str):
-        """Record a security event."""
+        """Record security event (synchronous version)."""
         event = SecurityEvent(
             timestamp=time.time(),
             event_type=event_type,
@@ -328,44 +404,35 @@ class SecurityMonitor:
         )
         
         self.security_events.append(event)
-        
-        # Update rate limiting
-        current_time = time.time()
-        self.event_counts[severity].append(current_time)
-        
-        # Clean old events
-        cutoff_time = current_time - 60
-        while self.event_counts[severity] and self.event_counts[severity][0] < cutoff_time:
-            self.event_counts[severity].popleft()
     
     def get_security_stats(self) -> Dict[str, Any]:
-        """Get security statistics."""
-        with self.lock:
-            recent_events = [e for e in self.security_events 
-                           if time.time() - e.timestamp < 3600]  # Last hour
-            
+        """Get security monitoring statistics."""
+        with self._lock:
             return {
+                'total_events': len(self.security_events),
                 'threat_stats': self.threat_detector.get_threat_stats(),
-                'recent_security_events': len(recent_events),
-                'blocked_ips': len(self.threat_detector.blocked_ips),
-                'suspicious_users': len([u for u, data in self.anomaly_detector.user_patterns.items() 
-                                       if data['suspicious_activity'] > 0]),
-                'event_rate_limits': {
-                    severity: len(events) for severity, events in self.event_counts.items()
-                }
+                'recent_events': [
+                    {
+                        'timestamp': event.timestamp,
+                        'type': event.event_type,
+                        'severity': event.severity,
+                        'source_ip': event.source_ip
+                    }
+                    for event in list(self.security_events)[-10:]
+                ]
             }
 
 
-# Global security monitor
-security_monitor = SecurityMonitor()
+# Global security monitor instance
+_security_monitor = SecurityMonitor()
 
 
 async def check_security(query: str, source_ip: str, user_id: Optional[str], 
                         response_time: float) -> Dict[str, Any]:
-    """Check request for security threats and anomalies."""
-    return security_monitor.analyze_request(query, source_ip, user_id, response_time)
+    """Check security for a request (non-blocking)."""
+    return await _security_monitor.analyze_request(query, source_ip, user_id, response_time)
 
 
 def get_security_summary() -> Dict[str, Any]:
     """Get security summary."""
-    return security_monitor.get_security_stats() 
+    return _security_monitor.get_security_stats() 

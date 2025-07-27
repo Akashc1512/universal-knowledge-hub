@@ -1,6 +1,6 @@
 
 """
-Multi-Agent Knowledge Platform - Scaffold Implementation
+Multi-Agent Knowledge Platform - Refactored Implementation
 This module provides the core architecture for a multi-agent system designed
 for intelligent knowledge retrieval, verification, synthesis, and citation.
 """
@@ -22,8 +22,12 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-# Import from base_agent to avoid duplication
+# Import proper agent implementations
 from agents.base_agent import QueryContext, AgentResult, AgentMessage, MessageType, TaskPriority, AgentType, BaseAgent
+from agents.retrieval_agent import RetrievalAgent
+from agents.factcheck_agent import FactCheckAgent
+from agents.synthesis_agent import SynthesisAgent
+from agents.citation_agent import CitationAgent
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -31,1436 +35,682 @@ logger = logging.getLogger(__name__)
 
 
 class LeadOrchestrator:
-    def __init__(self):
-        pass
-
-    def plan_execution(self, query):
-        from agents.retrieval_agent import RetrievalAgent  # ✅ Import here
-        retriever = RetrievalAgent()
-        return retriever.retrieve(query)
-
-
-# ============================================================================
-# Core Data Models and Enums
-# ============================================================================
-
-class MessageType(Enum):
-    TASK = "task"
-    RESULT = "result"
-    ERROR = "error"
-    CONTROL = "control"
-    HEARTBEAT = "heartbeat"
-
-
-class AgentType(Enum):
-    ORCHESTRATOR = "orchestrator"
-    RETRIEVAL = "retrieval"
-    FACT_CHECK = "fact_check"
-    SYNTHESIS = "synthesis"
-    CITATION = "citation"
-
-
-class TaskPriority(Enum):
-    LOW = 1
-    MEDIUM = 2
-    HIGH = 3
-    CRITICAL = 4
-    URGENT = 5
-
-
-@dataclass
-class AgentMessage:
     """
-    Standard message format for inter-agent communication.
-    
-    Attributes:
-        header: Message metadata including routing and timing information
-        payload: Actual task data, results, or control information
-    """
-    header: Dict[str, Any] = field(default_factory=lambda: {
-        'message_id': str(uuid.uuid4()),
-        'correlation_id': None,
-        'timestamp': datetime.utcnow().isoformat(),
-        'sender_agent': None,
-        'recipient_agent': None,
-        'message_type': MessageType.TASK,
-        'priority': TaskPriority.MEDIUM.value,
-        'ttl': 30000,  # milliseconds
-        'retry_count': 0,
-        'trace_id': None
-    })
-    payload: Dict[str, Any] = field(default_factory=lambda: {
-        'task': None,
-        'result': None,
-        'error': None,
-        'metadata': {},
-        'token_usage': {'prompt': 0, 'completion': 0}
-    })
-
-
-# QueryContext is now imported from base_agent
-
-
-@dataclass
-class AgentResult:
-    """Standard result format from agent execution"""
-    success: bool
-    data: Any
-    confidence: float = 0.0
-    token_usage: Dict[str, int] = field(default_factory=lambda: {'prompt': 0, 'completion': 0})
-    execution_time_ms: int = 0
-    error: Optional[str] = None
-    metadata: Dict[str, Any] = field(default_factory=dict)
-
-
-# ============================================================================
-# Base Agent Class
-# ============================================================================
-
-class BaseAgent(ABC):
-    """
-    Abstract base class for all agents in the system.
-    Provides common functionality for message handling, health checks, and metrics.
-    """
-    
-    def __init__(self, agent_id: str, agent_type: AgentType):
-        self.agent_id = agent_id
-        self.agent_type = agent_type
-        self.message_queue = asyncio.Queue()
-        self.metrics = defaultdict(int)
-        self.is_running = False
-        self.health_status = "healthy"
-        
-    @abstractmethod
-    async def process_task(self, task: Dict[str, Any], context: QueryContext) -> AgentResult:
-        """
-        Process a specific task. Must be implemented by each agent.
-        
-        TODO: Implement specific processing logic for each agent type
-        """
-        pass
-    
-    async def handle_message(self, message: AgentMessage) -> Optional[AgentMessage]:
-        """Handle incoming messages and route to appropriate handlers"""
-        try:
-            if message.header['message_type'] == MessageType.TASK:
-                result = await self.process_task(
-                    message.payload['task'],
-                    message.payload.get('context', QueryContext(query=""))
-                )
-                return self._create_result_message(message, result)
-            elif message.header['message_type'] == MessageType.CONTROL:
-                # TODO: Implement control message handling (pause, resume, shutdown)
-                pass
-            elif message.header['message_type'] == MessageType.HEARTBEAT:
-                return self._create_heartbeat_response(message)
-        except Exception as e:
-            logger.error(f"Error handling message in {self.agent_id}: {str(e)}")
-            return self._create_error_message(message, str(e))
-    
-    def _create_result_message(self, original: AgentMessage, result: AgentResult) -> AgentMessage:
-        """Create a result message in response to a task"""
-        return AgentMessage(
-            header={
-                **original.header,
-                'message_id': str(uuid.uuid4()),
-                'sender_agent': self.agent_id,
-                'recipient_agent': original.header['sender_agent'],
-                'message_type': MessageType.RESULT,
-                'timestamp': datetime.utcnow().isoformat()
-            },
-            payload={
-                'result': result.data,
-                'confidence': result.confidence,
-                'token_usage': result.token_usage,
-                'execution_time_ms': result.execution_time_ms,
-                'metadata': result.metadata
-            }
-        )
-    
-    def _create_error_message(self, original: AgentMessage, error: str) -> AgentMessage:
-        """Create an error message"""
-        return AgentMessage(
-            header={
-                **original.header,
-                'message_id': str(uuid.uuid4()),
-                'sender_agent': self.agent_id,
-                'recipient_agent': original.header['sender_agent'],
-                'message_type': MessageType.ERROR,
-                'timestamp': datetime.utcnow().isoformat()
-            },
-            payload={'error': error}
-        )
-    
-    def _create_heartbeat_response(self, original: AgentMessage) -> AgentMessage:
-        """Respond to heartbeat requests"""
-        return AgentMessage(
-            header={
-                **original.header,
-                'message_id': str(uuid.uuid4()),
-                'sender_agent': self.agent_id,
-                'recipient_agent': original.header['sender_agent'],
-                'timestamp': datetime.utcnow().isoformat()
-            },
-            payload={
-                'health_status': self.health_status,
-                'metrics': dict(self.metrics)
-            }
-        )
-
-
-# ============================================================================
-# Specialized Agent Implementations
-# ============================================================================
-
-class RetrievalAgent(BaseAgent):
-    """
-    Agent responsible for retrieving information from multiple sources.
-    Supports vector search, keyword search, and knowledge graph queries.
-    """
-    
-    def __init__(self, agent_id: str = "retrieval_001"):
-        super().__init__(agent_id, AgentType.RETRIEVAL)
-        self.vector_db_client = None  # TODO: Initialize vector DB client
-        self.search_client = None      # TODO: Initialize search client (Elasticsearch)
-        self.graph_client = None       # TODO: Initialize graph DB client
-        
-    async def process_task(self, task: Dict[str, Any], context: QueryContext) -> AgentResult:
-        """
-        Process retrieval tasks by executing appropriate search strategies.
-        
-        TODO: Implement query analysis and strategy selection logic
-        """
-        start_time = time.time()
-        
-        try:
-            # Determine retrieval strategy based on task type
-            strategy = task.get('strategy', 'hybrid')
-            
-            if strategy == 'hybrid':
-                results = await self._hybrid_retrieval(context.query, task)
-            elif strategy == 'vector':
-                results = await self.vector_search(context.query, task.get('top_k', 10))
-            elif strategy == 'keyword':
-                results = await self.keyword_search(context.query, task.get('filters', {}))
-            elif strategy == 'graph':
-                results = await self.graph_query(task.get('entities', []), task.get('max_hops', 2))
-            else:
-                raise ValueError(f"Unknown retrieval strategy: {strategy}")
-            
-            execution_time = int((time.time() - start_time) * 1000)
-            
-            return AgentResult(
-                success=True,
-                data={'retrieved_documents': results},
-                confidence=self._calculate_retrieval_confidence(results),
-                token_usage={'prompt': 50, 'completion': 0},  # TODO: Track actual usage
-                execution_time_ms=execution_time
-            )
-            
-        except Exception as e:
-            logger.error(f"Retrieval error: {str(e)}")
-            return AgentResult(
-                success=False,
-                data=None,
-                error=str(e),
-                execution_time_ms=int((time.time() - start_time) * 1000)
-            )
-    
-    async def vector_search(self, query: str, top_k: int = 10) -> List[Dict[str, Any]]:
-        """
-        Perform semantic vector search.
-        
-        TODO:
-        - Generate query embeddings using embedding model
-        - Search vector database (Pinecone/Weaviate/Qdrant)
-        - Apply metadata filters
-        - Return scored results
-        """
-        # Placeholder implementation
-        await asyncio.sleep(0.1)  # Simulate latency
-        return [
-            {
-                'content': f'Vector search result {i} for: {query}',
-                'score': 0.95 - (i * 0.05),
-                'source': f'source_{i}',
-                'metadata': {}
-            }
-            for i in range(min(top_k, 5))
-        ]
-    
-    async def keyword_search(self, query: str, filters: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """
-        Perform BM25 keyword-based search.
-        
-        TODO:
-        - Construct Elasticsearch query with filters
-        - Execute search with field boosting
-        - Apply temporal decay for recency
-        - Return scored results
-        """
-        # Placeholder implementation
-        await asyncio.sleep(0.1)  # Simulate latency
-        return [
-            {
-                'content': f'Keyword search result for: {query}',
-                'score': 0.85,
-                'source': 'elasticsearch',
-                'metadata': filters
-            }
-        ]
-    
-    async def graph_query(self, entities: List[str], max_hops: int = 2) -> List[Dict[str, Any]]:
-        """
-        Query knowledge graph for entity relationships and facts.
-        
-        TODO:
-        - Construct SPARQL queries for entity lookup
-        - Traverse graph up to max_hops
-        - Extract relevant triples
-        - Return structured results
-        """
-        # Placeholder implementation
-        await asyncio.sleep(0.1)  # Simulate latency
-        return [
-            {
-                'entity': entity,
-                'facts': [f'Fact about {entity}'],
-                'relationships': [],
-                'confidence': 0.9
-            }
-            for entity in entities
-        ]
-    
-    async def _hybrid_retrieval(self, query: str, task: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Execute all retrieval strategies in parallel and merge results"""
-        vector_task = self.vector_search(query, task.get('top_k', 10))
-        keyword_task = self.keyword_search(query, task.get('filters', {}))
-        graph_task = self.graph_query(task.get('entities', []), task.get('max_hops', 2))
-        
-        results = await asyncio.gather(vector_task, keyword_task, graph_task)
-        
-        # TODO: Implement sophisticated merging logic
-        # - Deduplicate results
-        # - Re-rank based on multiple signals
-        # - Apply diversity constraints
-        
-        merged_results = []
-        for result_set in results:
-            if isinstance(result_set, list):
-                merged_results.extend(result_set)
-        
-        return merged_results
-    
-    def _calculate_retrieval_confidence(self, results: List[Dict[str, Any]]) -> float:
-        """Calculate confidence score based on retrieval results"""
-        if not results:
-            return 0.0
-        
-        # TODO: Implement sophisticated confidence calculation
-        # Consider: result scores, source diversity, content coverage
-        
-        avg_score = sum(r.get('score', 0) for r in results) / len(results)
-        return min(avg_score, 1.0)
-
-
-class FactCheckAgent(BaseAgent):
-    """
-    Agent responsible for verifying claims and fact-checking retrieved information.
-    """
-    
-    def __init__(self, agent_id: str = "fact_check_001"):
-        super().__init__(agent_id, AgentType.FACT_CHECK)
-        self.knowledge_base = None  # TODO: Initialize knowledge base connection
-        self.fact_check_model = None  # TODO: Initialize fact-checking model
-        
-    async def process_task(self, task: Dict[str, Any], context: QueryContext) -> AgentResult:
-        """Process fact-checking tasks"""
-        start_time = time.time()
-        
-        try:
-            claims = task.get('claims', [])
-            sources = task.get('sources', [])
-            
-            verification_results = await self.verify_claims(claims, sources)
-            
-            return AgentResult(
-                success=True,
-                data={'verifications': verification_results},
-                confidence=self._calculate_verification_confidence(verification_results),
-                token_usage={'prompt': 100, 'completion': 50},  # TODO: Track actual usage
-                execution_time_ms=int((time.time() - start_time) * 1000)
-            )
-            
-        except Exception as e:
-            logger.error(f"Fact-check error: {str(e)}")
-            return AgentResult(
-                success=False,
-                data=None,
-                error=str(e),
-                execution_time_ms=int((time.time() - start_time) * 1000)
-            )
-    
-    async def verify_claim(self, claim: str, sources: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """
-        Verify a single claim against provided sources.
-        
-        TODO:
-        - Extract atomic claims from compound statements
-        - Search for supporting/refuting evidence in sources
-        - Check against knowledge base
-        - Apply logical consistency checks
-        - Return verdict with confidence and evidence
-        """
-        await asyncio.sleep(0.05)  # Simulate processing
-        
-        # Placeholder verification logic
-        return {
-            'claim': claim,
-            'verdict': 'supported',  # supported/refuted/unverifiable
-            'confidence': 0.85,
-            'evidence': [
-                {
-                    'source': sources[0] if sources else None,
-                    'supporting_text': f'Evidence supporting: {claim}',
-                    'relevance_score': 0.9
-                }
-            ],
-            'reasoning': 'Direct textual support found in primary source'
-        }
-    
-    async def verify_claims(self, claims: List[str], sources: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Verify multiple claims in parallel"""
-        verification_tasks = [
-            self.verify_claim(claim, sources) for claim in claims
-        ]
-        
-        results = await asyncio.gather(*verification_tasks)
-        
-        # TODO: Implement cross-claim consistency checking
-        # - Identify contradictions between verified claims
-        # - Adjust confidence based on consistency
-        
-        return results
-    
-    def _calculate_verification_confidence(self, results: List[Dict[str, Any]]) -> float:
-        """Calculate overall confidence in verification results"""
-        if not results:
-            return 0.0
-        
-        # Weight by individual claim confidence
-        total_confidence = sum(r.get('confidence', 0) for r in results)
-        
-        # Penalize for unverifiable claims
-        unverifiable_count = sum(1 for r in results if r.get('verdict') == 'unverifiable')
-        penalty = unverifiable_count * 0.1
-        
-        return max(0, min(1, (total_confidence / len(results)) - penalty))
-
-
-class SynthesisAgent(BaseAgent):
-    """
-    Agent responsible for synthesizing verified information into coherent responses.
-    """
-    
-    def __init__(self, agent_id: str = "synthesis_001"):
-        super().__init__(agent_id, AgentType.SYNTHESIS)
-        self.synthesis_model = None  # TODO: Initialize LLM for synthesis
-        self.coherence_scorer = None  # TODO: Initialize coherence scoring model
-        
-    async def process_task(self, task: Dict[str, Any], context: QueryContext) -> AgentResult:
-        """Process synthesis tasks"""
-        start_time = time.time()
-        
-        try:
-            verified_facts = task.get('verified_facts', [])
-            synthesis_params = task.get('synthesis_params', {})
-            
-            synthesized_response = await self.synthesize(
-                verified_facts,
-                context,
-                synthesis_params
-            )
-            
-            return AgentResult(
-                success=True,
-                data={'response': synthesized_response},
-                confidence=synthesized_response.get('confidence', 0.8),
-                token_usage={'prompt': 500, 'completion': 300},  # TODO: Track actual usage
-                execution_time_ms=int((time.time() - start_time) * 1000)
-            )
-            
-        except Exception as e:
-            logger.error(f"Synthesis error: {str(e)}")
-            return AgentResult(
-                success=False,
-                data=None,
-                error=str(e),
-                execution_time_ms=int((time.time() - start_time) * 1000)
-            )
-    
-    async def synthesize(
-        self, 
-        verified_facts: List[Dict[str, Any]], 
-        context: QueryContext,
-        params: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """
-        Synthesize verified facts into a coherent response.
-        
-        TODO:
-        - Group related facts by topic/theme
-        - Apply reasoning strategies (deductive, inductive, analogical)
-        - Generate response using LLM with fact grounding
-        - Optimize for coherence and completeness
-        - Include uncertainty markers where appropriate
-        """
-        await asyncio.sleep(0.2)  # Simulate LLM processing
-        
-        # Placeholder synthesis
-        response_text = f"Based on the analysis of {len(verified_facts)} verified facts regarding '{context.query}', "
-        response_text += "here is a comprehensive response: [Synthesized content would go here]"
-        
-        # TODO: Implement actual synthesis logic with:
-        # - Fact prioritization
-        # - Logical flow construction
-        # - Coherence optimization
-        # - Completeness checking
-        
-        return {
-            'text': response_text,
-            'key_points': ['Point 1', 'Point 2', 'Point 3'],
-            'confidence': 0.85,
-            'reasoning_trace': ['Step 1', 'Step 2', 'Step 3'],
-            'uncertainty_areas': [],
-            'coherence_score': 0.9
-        }
-
-
-class CitationAgent(BaseAgent):
-    """
-    Agent responsible for generating proper citations and managing source attribution.
-    """
-    
-    def __init__(self, agent_id: str = "citation_001"):
-        super().__init__(agent_id, AgentType.CITATION)
-        self.citation_formatter = None  # TODO: Initialize citation formatting library
-        self.reliability_scorer = None  # TODO: Initialize source reliability model
-        
-    async def process_task(self, task: Dict[str, Any], context: QueryContext) -> AgentResult:
-        """Process citation generation tasks"""
-        start_time = time.time()
-        
-        try:
-            content = task.get('content', '')
-            sources = task.get('sources', [])
-            style = task.get('citation_style', 'APA')
-            
-            citations = await self.generate_citations(content, sources, style)
-            
-            return AgentResult(
-                success=True,
-                data={'citations': citations},
-                confidence=0.95,  # Citation generation is deterministic
-                token_usage={'prompt': 50, 'completion': 100},  # TODO: Track actual usage
-                execution_time_ms=int((time.time() - start_time) * 1000)
-            )
-            
-        except Exception as e:
-            logger.error(f"Citation error: {str(e)}")
-            return AgentResult(
-                success=False,
-                data=None,
-                error=str(e),
-                execution_time_ms=int((time.time() - start_time) * 1000)
-            )
-    
-    async def generate_citations(
-        self, 
-        content: str, 
-        sources: List[Dict[str, Any]], 
-        style: str = 'APA'
-    ) -> Dict[str, Any]:
-        """
-        Generate formatted citations for content and sources.
-        
-        TODO:
-        - Parse content to identify claims needing citations
-        - Match claims to appropriate sources
-        - Format citations according to specified style
-        - Generate bibliography
-        - Calculate source reliability scores
-        """
-        await asyncio.sleep(0.05)  # Simulate processing
-        
-        # Placeholder citation generation
-        inline_citations = []
-        bibliography = []
-        
-        for i, source in enumerate(sources):
-            citation_marker = f"[{i+1}]"
-            
-            # TODO: Implement actual citation formatting based on style
-            formatted_citation = f"Author, A. (2024). {source.get('title', 'Title')}. Source."
-            
-            inline_citations.append({
-                'marker': citation_marker,
-                'source_id': source.get('id', f'source_{i}'),
-                'reliability_score': 0.8  # TODO: Calculate actual reliability
-            })
-            
-            bibliography.append({
-                'id': f'source_{i}',
-                'full_citation': formatted_citation,
-                'url': source.get('url', ''),
-                'access_date': datetime.utcnow().isoformat()
-            })
-        
-        return {
-            'cited_content': content,  # TODO: Insert actual citation markers
-            'inline_citations': inline_citations,
-            'bibliography': bibliography,
-            'citation_style': style,
-            'total_sources': len(sources)
-        }
-
-
-# ============================================================================
-# Lead Orchestrator Implementation
-# ============================================================================
-
-class LeadOrchestrator:
-    """
-    Central orchestrator responsible for coordinating all agents and managing
-    the overall query processing workflow.
+    Refactored LeadOrchestrator that uses proper agent implementations
+    and provides clean coordination patterns.
     """
     
     def __init__(self):
-        self.agents = {}
-        self.message_broker = MessageBroker()
-        self.token_controller = TokenBudgetController()
-        self.cache_manager = SemanticCacheManager()
-        self.response_aggregator = ResponseAggregator()
-        self.task_queue = asyncio.Queue()  # Add missing task_queue
-        self._initialize_agents()
+        """Initialize orchestrator with proper agent instances."""
+        logger.info("🚀 Initializing LeadOrchestrator with proper agent implementations")
         
-    def _initialize_agents(self):
-        """Initialize and register all agent instances"""
+        # Initialize agents using proper implementations
         self.agents = {
             AgentType.RETRIEVAL: RetrievalAgent(),
             AgentType.FACT_CHECK: FactCheckAgent(),
             AgentType.SYNTHESIS: SynthesisAgent(),
             AgentType.CITATION: CitationAgent()
         }
-    
+        
+        # Initialize supporting components
+        self.token_budget = TokenBudgetController()
+        self.semantic_cache = SemanticCacheManager()
+        self.response_aggregator = ResponseAggregator()
+        
+        logger.info("✅ LeadOrchestrator initialized successfully")
+
     async def process_query(self, query: str, user_context: Dict[str, Any] = None) -> Dict[str, Any]:
         """
-        Main entry point for processing user queries.
+        Main entry point for processing queries through the multi-agent pipeline.
         
-        TODO:
-        - Implement query complexity analysis
-        - Add query result caching
-        - Implement timeout handling
+        Args:
+            query: The user's question
+            user_context: Optional user context and preferences
+            
+        Returns:
+            Dict containing the answer, confidence, citations, and metadata
         """
         start_time = time.time()
         
-        # Create query context
-        context = QueryContext(
-            query=query,
-            user_id=user_context.get('user_id') if user_context else None,
-            session_id=str(uuid.uuid4()),
-            token_budget=self.token_controller.allocate_budget_for_query(query)
-        )
-        
-        # Check cache first
-        cached_result = await self.cache_manager.get_cached_response(query)
-        if cached_result:
-            logger.info(f"Cache hit for query: {query[:50]}...")
-            return cached_result
-        
         try:
-            # Analyze query and create execution plan
-            execution_plan = await self.analyze_and_plan(context)
+            # Create query context
+            context = QueryContext(
+                query=query,
+                user_context=user_context or {},
+                trace_id=str(uuid.uuid4())
+            )
             
-            # Execute plan based on complexity and type
-            if execution_plan['pattern'] == 'simple':
-                result = await self.execute_pipeline(context, execution_plan)
-            elif execution_plan['pattern'] == 'fork_join':
-                result = await self.execute_fork_join(context, execution_plan)
-            elif execution_plan['pattern'] == 'scatter_gather':
-                result = await self.execute_scatter_gather(context, execution_plan)
+            # Check cache first
+            cached_result = await self.semantic_cache.get_cached_response(query)
+            if cached_result:
+                logger.info(f"Cache HIT for query: {query[:50]}...")
+                return cached_result
+            
+            # Analyze and plan execution
+            plan = await self.analyze_and_plan(context)
+            
+            # Execute based on plan
+            if plan['execution_pattern'] == 'pipeline':
+                result = await self.execute_pipeline(context, plan)
+            elif plan['execution_pattern'] == 'fork_join':
+                result = await self.execute_fork_join(context, plan)
+            elif plan['execution_pattern'] == 'scatter_gather':
+                result = await self.execute_scatter_gather(context, plan)
             else:
-                result = await self.execute_pipeline_with_feedback(context, execution_plan)
+                result = await self.execute_pipeline(context, plan)  # Default to pipeline
             
-            # Cache successful results
-            await self.cache_manager.cache_response(query, result)
+            # Aggregate results
+            final_response = self.response_aggregator.aggregate_pipeline_results(result, context)
             
-            # Calculate total execution time
-            total_time = int((time.time() - start_time) * 1000)
-            result['execution_time_ms'] = total_time
+            # Cache successful response
+            if final_response.get('success', False):
+                await self.semantic_cache.cache_response(query, final_response)
             
-            return result
+            return final_response
             
         except Exception as e:
-            logger.error(f"Query processing error: {str(e)}")
+            logger.error(f"Query processing failed: {str(e)}")
             return {
-                'error': str(e),
-                'execution_time_ms': int((time.time() - start_time) * 1000),
-                'fallback_response': 'I encountered an error processing your query. Please try again.'
+                'success': False,
+                'error': f'Query processing failed: {str(e)}',
+                'answer': '',
+                'confidence': 0.0,
+                'citations': [],
+                'metadata': {
+                    'trace_id': context.trace_id if 'context' in locals() else str(uuid.uuid4()),
+                    'execution_time_ms': int((time.time() - start_time) * 1000)
+                }
             }
-    
+
     async def analyze_and_plan(self, context: QueryContext) -> Dict[str, Any]:
         """
         Analyze query and create execution plan.
         
-        TODO:
-        - Implement NLP-based query analysis
-        - Detect query intent and required capabilities
-        - Estimate complexity and resource requirements
-        - Select optimal execution pattern
+        Args:
+            context: Query context
+            
+        Returns:
+            Execution plan
         """
-        # Placeholder implementation
-        complexity = len(context.query.split()) / 10  # Simple heuristic
+        # Simple planning based on query characteristics
+        query_lower = context.query.lower()
         
-        # Determine execution pattern based on complexity
-        if complexity < 0.5:
-            pattern = 'simple'
-        elif complexity < 1.0:
-            pattern = 'fork_join'
+        # Determine execution pattern
+        if any(word in query_lower for word in ['compare', 'versus', 'vs', 'difference']):
+            execution_pattern = 'fork_join'
+        elif any(word in query_lower for word in ['research', 'study', 'analysis']):
+            execution_pattern = 'scatter_gather'
         else:
-            pattern = 'scatter_gather'
+            execution_pattern = 'pipeline'
+        
+        # Define agent sequence
+        agents_sequence = [
+            AgentType.RETRIEVAL,
+            AgentType.FACT_CHECK,
+            AgentType.SYNTHESIS,
+            AgentType.CITATION
+        ]
         
         return {
-            'pattern': pattern,
-            'complexity_score': complexity,
-            'required_agents': [AgentType.RETRIEVAL, AgentType.FACT_CHECK, 
-                              AgentType.SYNTHESIS, AgentType.CITATION],
-            'estimated_tokens': int(1000 * complexity),
-            'timeout_ms': 5000 + int(5000 * complexity)
+            'execution_pattern': execution_pattern,
+            'agents_sequence': agents_sequence,
+            'estimated_tokens': len(context.query.split()) * 10
+        }
+
+    async def execute_pipeline(self, context: QueryContext, plan: Dict[str, Any]) -> Dict[AgentType, AgentResult]:
+        """
+        Execute agents in an optimized pipeline with parallel execution where possible.
+        
+        Args:
+            context: Query context
+            plan: Execution plan
+            
+        Returns:
+            Results from each agent
+        """
+        results = {}
+        
+        # Phase 1: Parallel retrieval and initial analysis
+        logger.info("Phase 1: Parallel retrieval and analysis")
+        phase1_tasks = []
+        
+        # Start retrieval immediately
+        retrieval_task = self.agents[AgentType.RETRIEVAL].process_task({
+            'query': context.query,
+            'search_type': 'hybrid',
+            'top_k': 20
+        }, context)
+        phase1_tasks.append((AgentType.RETRIEVAL, retrieval_task))
+        
+        # Start entity extraction in parallel (if not already done by retrieval)
+        entity_task = self._extract_entities_parallel(context.query)
+        phase1_tasks.append(('entities', entity_task))
+        
+        # Execute phase 1 tasks in parallel
+        phase1_results = await asyncio.gather(*[task for _, task in phase1_tasks], return_exceptions=True)
+        
+        # Process phase 1 results
+        for i, (agent_type, _) in enumerate(phase1_tasks):
+            if isinstance(phase1_results[i], Exception):
+                logger.error(f"Phase 1 task failed: {phase1_results[i]}")
+                if agent_type == AgentType.RETRIEVAL:
+                    # Critical failure
+                    return {agent_type: AgentResult(
+                        success=False,
+                        error=f"Retrieval failed: {phase1_results[i]}",
+                        data={'documents': []}
+                    )}
+            else:
+                results[agent_type] = phase1_results[i]
+        
+        # Phase 2: Fact checking and synthesis preparation
+        logger.info("Phase 2: Fact checking and synthesis preparation")
+        phase2_tasks = []
+        
+        # Start fact checking with retrieved documents
+        if AgentType.RETRIEVAL in results and results[AgentType.RETRIEVAL].success:
+            fact_check_task = self.agents[AgentType.FACT_CHECK].process_task({
+                'documents': results[AgentType.RETRIEVAL].data.get('documents', []),
+                'query': context.query
+            }, context)
+            phase2_tasks.append((AgentType.FACT_CHECK, fact_check_task))
+        
+        # Start synthesis preparation (document summarization) in parallel
+        if AgentType.RETRIEVAL in results and results[AgentType.RETRIEVAL].success:
+            synthesis_prep_task = self._prepare_synthesis_data(
+                results[AgentType.RETRIEVAL].data.get('documents', []),
+                context.query
+            )
+            phase2_tasks.append(('synthesis_prep', synthesis_prep_task))
+        
+        # Execute phase 2 tasks in parallel
+        if phase2_tasks:
+            phase2_results = await asyncio.gather(*[task for _, task in phase2_tasks], return_exceptions=True)
+            
+            for i, (agent_type, _) in enumerate(phase2_tasks):
+                if isinstance(phase2_results[i], Exception):
+                    logger.error(f"Phase 2 task failed: {phase2_results[i]}")
+                    if agent_type == AgentType.FACT_CHECK:
+                        # Continue without fact checking
+                        results[agent_type] = AgentResult(
+                            success=False,
+                            error=f"Fact checking failed: {phase2_results[i]}",
+                            data={'verified_facts': []}
+                        )
+                else:
+                    results[agent_type] = phase2_results[i]
+        
+        # Phase 3: Synthesis and citation (sequential due to dependencies)
+        logger.info("Phase 3: Synthesis and citation")
+        
+        # Synthesis
+        synthesis_input = self._prepare_synthesis_input(results, context)
+        synthesis_result = await self.agents[AgentType.SYNTHESIS].process_task(synthesis_input, context)
+        results[AgentType.SYNTHESIS] = synthesis_result
+        
+        if not synthesis_result.success:
+            logger.error(f"Synthesis failed: {synthesis_result.error}")
+            return results
+        
+        # Citation (depends on synthesis)
+        citation_result = await self.agents[AgentType.CITATION].process_task({
+            'content': synthesis_result.data.get('answer', ''),
+            'sources': results.get(AgentType.RETRIEVAL, AgentResult(success=False, data={'documents': []})).data.get('documents', [])
+        }, context)
+        results[AgentType.CITATION] = citation_result
+        
+        return results
+    
+    async def _extract_entities_parallel(self, query: str) -> List[Dict[str, Any]]:
+        """Extract entities in parallel (if not already done by retrieval agent)."""
+        # This is a lightweight operation that can run in parallel
+        await asyncio.sleep(0.01)  # Simulate processing
+        return [
+            {'text': 'parallel_entity', 'type': 'PROPER_NOUN', 'confidence': 0.8}
+        ]
+    
+    async def _prepare_synthesis_data(self, documents: List[Dict[str, Any]], query: str) -> Dict[str, Any]:
+        """Prepare synthesis data in parallel."""
+        # This could include document summarization, relevance scoring, etc.
+        await asyncio.sleep(0.05)  # Simulate processing
+        
+        return {
+            'prepared_documents': documents[:10],  # Top 10 most relevant
+            'summary': f"Prepared {len(documents)} documents for synthesis",
+            'relevance_scores': [doc.get('score', 0.5) for doc in documents[:10]]
         }
     
-    async def execute_pipeline(self, context: QueryContext, plan: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Execute simple sequential pipeline.
-        Flow: Retrieval -> Fact-Check -> Synthesis -> Citation
-        """
-        results = {}
-        current_data = None
-        total_tokens_used = 0
-        agent_budgets = {}
-        agent_tokens = {}
-        # Calculate per-agent budgets
-        for agent_type in plan['required_agents']:
-            agent_budgets[agent_type] = self.token_controller.get_agent_budget(agent_type, context.token_budget)
-        # Sequential execution
-        for agent_type in plan['required_agents']:
-            agent = self.agents[agent_type]
-            task = self._prepare_task_for_agent(agent_type, current_data, context)
-            # Simulate token usage (random for now, replace with real count in production)
-            import random
-            simulated_tokens = random.randint(100, 400)
-            agent_tokens[agent_type] = simulated_tokens
-            if simulated_tokens > agent_budgets[agent_type]:
-                logger.warning(f"[TOKEN] {agent_type} exceeded budget ({simulated_tokens} > {agent_budgets[agent_type]}) - simulating truncation.")
-                agent_result = AgentResult(
-                    success=False,
-                    data=None,
-                    confidence=0.0,
-                    token_usage={'prompt': simulated_tokens, 'completion': 0},
-                    execution_time_ms=0,
-                    error=f"Token budget exceeded for {agent_type}",
-                    metadata={}
-                )
-            else:
-                agent_result = await agent.process_task(task, context)
-                agent_result.token_usage['prompt'] = simulated_tokens
-            total_tokens_used += simulated_tokens
-            if not agent_result.success:
-                logger.error(f"{agent_type} failed: {agent_result.error}")
-                continue
-            results[agent_type] = agent_result
-            current_data = agent_result.data
-        logger.info(f"[TOKEN] Total tokens used for query: {total_tokens_used}")
-        logger.info(f"[TOKEN] Per-agent usage: {agent_tokens}")
-        return self.response_aggregator.aggregate_pipeline_results(results, context)
-    
-    async def execute_fork_join(self, context: QueryContext, plan: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Execute fork-join pattern for parallel retrieval.
+    def _prepare_synthesis_input(self, results: Dict[AgentType, AgentResult], context: QueryContext) -> Dict[str, Any]:
+        """Prepare input for synthesis agent."""
+        verified_facts = []
+        if AgentType.FACT_CHECK in results and results[AgentType.FACT_CHECK].success:
+            verified_facts = results[AgentType.FACT_CHECK].data.get('verified_facts', [])
         
-        TODO:
-        - Fork to multiple retrieval strategies
-        - Join results before fact-checking
-        - Continue with sequential pipeline
-        """
-        results = {}
+        # Use prepared synthesis data if available
+        synthesis_prep = None
+        for key, result in results.items():
+            if key == 'synthesis_prep' and result.success:
+                synthesis_prep = result.data
+                break
         
-        # Fork phase - parallel retrieval
-        retrieval_tasks = []
-        strategies = ['vector', 'keyword', 'graph']
-        
-        for strategy in strategies:
-            task = {
-                'strategy': strategy,
-                'query': context.query,
-                'top_k': 10
+        return {
+            'verified_facts': verified_facts,
+            'query': context.query,
+            'synthesis_params': {
+                'style': 'concise',
+                'max_length': 1000,
+                'prepared_data': synthesis_prep
             }
-            retrieval_tasks.append(
-                self.agents[AgentType.RETRIEVAL].process_task(task, context)
-            )
+        }
+
+    async def execute_fork_join(self, context: QueryContext, plan: Dict[str, Any]) -> Dict[AgentType, AgentResult]:
+        """
+        Execute retrieval agents in parallel and merge results.
         
-        # Join phase
+        Args:
+            context: Query context
+            plan: Execution plan
+            
+        Returns:
+            Merged results from parallel execution
+        """
+        # Create parallel retrieval tasks
+        retrieval_tasks = [
+            self.agents[AgentType.RETRIEVAL].process_task({
+                'query': context.query,
+                'search_type': 'vector',
+                'top_k': 10
+            }, context),
+            self.agents[AgentType.RETRIEVAL].process_task({
+                'query': context.query,
+                'search_type': 'keyword',
+                'top_k': 10
+            }, context),
+            self.agents[AgentType.RETRIEVAL].process_task({
+                'query': context.query,
+                'search_type': 'graph',
+                'top_k': 10
+            }, context)
+        ]
+        
+        # Execute in parallel
+        logger.info("Executing parallel retrieval tasks")
         retrieval_results = await asyncio.gather(*retrieval_tasks, return_exceptions=True)
         
+        # Handle exceptions in retrieval results
+        valid_results = []
+        for result in retrieval_results:
+            if isinstance(result, Exception):
+                logger.error(f"Retrieval task failed: {result}")
+            elif result.success:
+                valid_results.append(result)
+        
+        if not valid_results:
+            logger.error("All retrieval tasks failed")
+            return {
+                AgentType.RETRIEVAL: AgentResult(
+                    success=False,
+                    error="All retrieval tasks failed",
+                    data={'documents': []}
+                )
+            }
+        
         # Merge retrieval results
-        merged_retrieval = self._merge_retrieval_results(retrieval_results)
-        results[AgentType.RETRIEVAL] = merged_retrieval
+        merged_retrieval = self._merge_retrieval_results(valid_results)
         
-        # Continue with sequential pipeline
-        current_data = merged_retrieval.data
+        # Continue with synthesis and citation
+        synthesis_result = await self.agents[AgentType.SYNTHESIS].process_task({
+            'verified_facts': merged_retrieval.data.get('documents', []),
+            'query': context.query,
+            'synthesis_params': {'style': 'concise'}
+        }, context)
         
-        for agent_type in [AgentType.FACT_CHECK, AgentType.SYNTHESIS, AgentType.CITATION]:
-            agent = self.agents[agent_type]
-            task = self._prepare_task_for_agent(agent_type, current_data, context)
-            agent_result = await agent.process_task(task, context)
-            results[agent_type] = agent_result
-            current_data = agent_result.data
+        if not synthesis_result.success:
+            logger.error(f"Synthesis failed: {synthesis_result.error}")
+            return {
+                AgentType.RETRIEVAL: merged_retrieval,
+                AgentType.SYNTHESIS: synthesis_result
+            }
         
-        return self.response_aggregator.aggregate_fork_join_results(results, context)
-    
-    async def execute_scatter_gather(self, context: QueryContext, plan: Dict[str, Any]) -> Dict[str, Any]:
+        citation_result = await self.agents[AgentType.CITATION].process_task({
+            'content': synthesis_result.data.get('answer', ''),
+            'sources': merged_retrieval.data.get('documents', [])
+        }, context)
+        
+        return {
+            AgentType.RETRIEVAL: merged_retrieval,
+            AgentType.SYNTHESIS: synthesis_result,
+            AgentType.CITATION: citation_result
+        }
+
+    async def execute_scatter_gather(self, context: QueryContext, plan: Dict[str, Any]) -> Dict[AgentType, AgentResult]:
         """
-        Execute scatter-gather pattern for multi-domain queries.
+        Execute domain-specific searches and combine results.
         
-        TODO:
-        - Detect multiple domains in query
-        - Scatter to domain-specific agent configurations
-        - Gather and synthesize domain-specific results
-        """
-        # Detect domains (placeholder)
-        domains = ['general', 'scientific', 'historical']
-        
-        # Scatter phase
-        domain_tasks = []
-        for domain in domains:
-            domain_context = QueryContext(
-                query=context.query,
-                domains=[domain],
-                token_budget=context.token_budget // len(domains)
-            )
-            domain_tasks.append(
-                self.execute_pipeline(domain_context, plan)
-            )
-        
-        # Gather phase with timeout
-        done, pending = await asyncio.wait(
-            domain_tasks,
-            timeout=plan['timeout_ms'] / 1000,
-            return_when=asyncio.ALL_COMPLETED
-        )
-        
-        # Cancel pending tasks
-        for task in pending:
-            task.cancel()
-        
-        # Aggregate domain results
-        domain_results = []
-        for task in done:
-            try:
-                domain_results.append(await task)
-            except Exception as e:
-                logger.error(f"Domain task error: {e}")
-        
-        return self.response_aggregator.aggregate_scatter_gather_results(domain_results, context)
-    
-    async def execute_pipeline_with_feedback(self, context: QueryContext, plan: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Execute pipeline with quality feedback loops.
-        
-        TODO:
-        - Implement quality assessment after each stage
-        - Retry with feedback if quality is below threshold
-        - Track improvement metrics
-        """
-        results = {}
-        current_data = None
-        max_retries = 2
-        
-        for agent_type in plan['required_agents']:
-            agent = self.agents[agent_type]
+        Args:
+            context: Query context
+            plan: Execution plan
             
-            for attempt in range(max_retries + 1):
-                task = self._prepare_task_for_agent(agent_type, current_data, context)
-                
-                # Add feedback from previous attempt if any
-                if attempt > 0:
-                    task['feedback'] = results.get(f'{agent_type}_feedback', {})
-                
-                agent_result = await agent.process_task(task, context)
-                
-                # Assess quality
-                quality_score = self._assess_result_quality(agent_type, agent_result)
-                
-                if quality_score >= 0.8 or attempt == max_retries:
-                    results[agent_type] = agent_result
-                    current_data = agent_result.data
-                    break
-                else:
-                    # Generate feedback for retry
-                    feedback = self._generate_improvement_feedback(agent_type, agent_result)
-                    results[f'{agent_type}_feedback'] = feedback
-                    logger.info(f"Retrying {agent_type} with feedback (attempt {attempt + 1})")
+        Returns:
+            Combined results from domain-specific searches
+        """
+        # Detect domains
+        domains = await self._detect_query_domains(context.query)
         
-        return self.response_aggregator.aggregate_feedback_pipeline_results(results, context)
-    
-    def _prepare_task_for_agent(self, agent_type: AgentType, previous_data: Any, context: QueryContext) -> Dict[str, Any]:
-        """Prepare task payload for specific agent based on previous results"""
+        if not domains:
+            # Fallback to standard pipeline
+            return await self.execute_pipeline(context, plan)
+        
+        # Generate domain-specific queries
+        domain_queries = await self._generate_domain_queries(context.query, domains)
+        
+        # Execute parallel domain searches
+        domain_tasks = []
+        for domain, domain_query in domain_queries.items():
+            task = self.agents[AgentType.RETRIEVAL].process_task({
+                'query': domain_query,
+                'search_type': 'hybrid',
+                'top_k': 15
+            }, context)
+            domain_tasks.append(task)
+        
+        # Execute domain searches
+        domain_results = await asyncio.gather(*domain_tasks, return_exceptions=True)
+        
+        # Combine domain results
+        all_documents = []
+        for result in domain_results:
+            if isinstance(result, Exception):
+                logger.error(f"Domain search failed: {result}")
+            elif result.success:
+                all_documents.extend(result.data.get('documents', []))
+        
+        # Create merged retrieval result
+        merged_retrieval = self._merge_retrieval_results([
+            AgentResult(success=True, data={'documents': all_documents})
+        ])
+        
+        # Continue with synthesis and citation
+        synthesis_result = await self.agents[AgentType.SYNTHESIS].process_task({
+            'verified_facts': merged_retrieval.data.get('documents', []),
+            'query': context.query,
+            'synthesis_params': {'style': 'comprehensive'}
+        }, context)
+        
+        citation_result = await self.agents[AgentType.CITATION].process_task({
+            'content': synthesis_result.data.get('answer', ''),
+            'sources': merged_retrieval.data.get('documents', [])
+        }, context)
+        
+        return {
+            AgentType.RETRIEVAL: merged_retrieval,
+            AgentType.SYNTHESIS: synthesis_result,
+            AgentType.CITATION: citation_result
+        }
+
+    def _prepare_task_for_agent(self, agent_type: AgentType, previous_result: Optional[AgentResult], context: QueryContext) -> Dict[str, Any]:
+        """
+        Prepare task data for a specific agent.
+        
+        Args:
+            agent_type: Type of agent to prepare task for
+            previous_result: Result from previous agent (if any)
+            context: Query context
+            
+        Returns:
+            Task data for the agent
+        """
         if agent_type == AgentType.RETRIEVAL:
             return {
                 'query': context.query,
-                'strategy': 'hybrid',
-                'top_k': 20,
-                'filters': {},
-                'entities': []  # TODO: Extract entities from query
+                'search_type': 'hybrid',
+                'top_k': 20
             }
-        
         elif agent_type == AgentType.FACT_CHECK:
-            # Extract claims from retrieval results
-            claims = []
-            sources = []
-            
-            if previous_data and 'retrieved_documents' in previous_data:
-                # TODO: Implement claim extraction from documents
-                claims = [f"Claim from document about: {context.query}"]
-                sources = previous_data['retrieved_documents']
-            
+            documents = previous_result.data.get('documents', []) if previous_result else []
             return {
-                'claims': claims,
-                'sources': sources,
-                'verification_depth': 'thorough'
+                'documents': documents,
+                'query': context.query
             }
-        
         elif agent_type == AgentType.SYNTHESIS:
-            # Prepare verified facts for synthesis
-            verified_facts = []
-            
-            if previous_data and 'verifications' in previous_data:
-                verified_facts = [
-                    v for v in previous_data['verifications']
-                    if v.get('verdict') == 'supported'
-                ]
-            
+            verified_facts = previous_result.data.get('verified_facts', []) if previous_result else []
             return {
                 'verified_facts': verified_facts,
-                'synthesis_params': {
-                    'style': 'informative',
-                    'length': 'medium',
-                    'include_uncertainty': True
-                }
+                'query': context.query,
+                'synthesis_params': {'style': 'concise', 'max_length': 1000}
             }
-        
         elif agent_type == AgentType.CITATION:
-            # Prepare content and sources for citation
-            content = ""
-            sources = []
-            
-            if previous_data and 'response' in previous_data:
-                content = previous_data['response'].get('text', '')
-                # TODO: Extract sources used in synthesis
-                sources = []
-            
+            answer = previous_result.data.get('answer', '') if previous_result else ''
+            sources = previous_result.data.get('documents', []) if previous_result else []
             return {
-                'content': content,
+                'content': answer,
                 'sources': sources,
-                'citation_style': 'APA'
+                'style': 'APA'
             }
-        
-        return {}
-    
+        else:
+            return {'query': context.query}
+
     def _merge_retrieval_results(self, results: List[AgentResult]) -> AgentResult:
-        """Merge multiple retrieval results into unified result"""
+        """
+        Merge multiple retrieval results with deduplication and ranking.
+        
+        Args:
+            results: List of retrieval results
+            
+        Returns:
+            Merged result with deduplicated documents
+        """
         all_documents = []
-        total_tokens = {'prompt': 0, 'completion': 0}
         
         for result in results:
-            if isinstance(result, AgentResult) and result.success:
-                docs = result.data.get('retrieved_documents', [])
-                all_documents.extend(docs)
-                total_tokens['prompt'] += result.token_usage['prompt']
-                total_tokens['completion'] += result.token_usage['completion']
+            if result.success:
+                all_documents.extend(result.data.get('documents', []))
         
-        # TODO: Implement sophisticated deduplication and re-ranking
-        # For now, just sort by score
-        all_documents.sort(key=lambda x: x.get('score', 0), reverse=True)
+        # Deduplicate by content
+        seen_contents = set()
+        unique_documents = []
+        
+        for doc in all_documents:
+            content_hash = hash(doc.get('content', ''))
+            if content_hash not in seen_contents:
+                seen_contents.add(content_hash)
+                unique_documents.append(doc)
+        
+        # Sort by relevance score
+        unique_documents.sort(key=lambda x: x.get('score', 0), reverse=True)
+        
+        # Take top documents
+        final_documents = unique_documents[:20]
         
         return AgentResult(
             success=True,
-            data={'retrieved_documents': all_documents[:20]},  # Top 20
-            confidence=0.85,
-            token_usage=total_tokens
+            data={'documents': final_documents},
+            confidence=min(0.9, len(final_documents) / 20.0)
         )
-    
-    def _assess_result_quality(self, agent_type: AgentType, result: AgentResult) -> float:
+
+    async def _detect_query_domains(self, query: str) -> List[str]:
         """
-        Assess quality of agent result for feedback loop.
+        Detect relevant domains for a query.
         
-        TODO: Implement agent-specific quality metrics
+        Args:
+            query: User query
+            
+        Returns:
+            List of relevant domains
         """
-        if not result.success:
-            return 0.0
+        # Simple domain detection based on keywords
+        query_lower = query.lower()
+        domains = []
         
-        # Placeholder quality assessment
-        base_quality = result.confidence
+        if any(word in query_lower for word in ['science', 'research', 'study', 'experiment']):
+            domains.append('scientific')
         
-        # Agent-specific adjustments
-        if agent_type == AgentType.RETRIEVAL:
-            # Check document relevance and diversity
-            docs = result.data.get('retrieved_documents', [])
-            if len(docs) < 5:
-                base_quality *= 0.8
+        if any(word in query_lower for word in ['news', 'current', 'recent', 'latest']):
+            domains.append('news')
         
-        elif agent_type == AgentType.FACT_CHECK:
-            # Check verification completeness
-            verifications = result.data.get('verifications', [])
-            unverifiable_rate = sum(1 for v in verifications if v.get('verdict') == 'unverifiable') / max(len(verifications), 1)
-            base_quality *= (1 - unverifiable_rate * 0.5)
+        if any(word in query_lower for word in ['business', 'market', 'company', 'industry']):
+            domains.append('business')
         
-        elif agent_type == AgentType.SYNTHESIS:
-            # Check response coherence and completeness
-            response = result.data.get('response', {})
-            if not response.get('text') or len(response.get('text', '')) < 100:
-                base_quality *= 0.7
+        if any(word in query_lower for word in ['academic', 'scholarly', 'paper', 'journal']):
+            domains.append('academic')
         
-        return min(base_quality, 1.0)
-    
-    def _generate_improvement_feedback(self, agent_type: AgentType, result: AgentResult) -> Dict[str, Any]:
-        """Generate specific feedback for agent improvement"""
-        feedback = {
-            'quality_issues': [],
-            'suggestions': [],
-            'priority': 'medium'
-        }
+        if any(word in query_lower for word in ['technology', 'tech', 'software', 'digital']):
+            domains.append('technology')
         
-        # TODO: Implement sophisticated feedback generation
-        # This would analyze the result and provide specific guidance
-        
-        if agent_type == AgentType.RETRIEVAL:
-            feedback['suggestions'].append('Expand query with synonyms')
-            feedback['suggestions'].append('Include more diverse sources')
-        
-        elif agent_type == AgentType.SYNTHESIS:
-            feedback['suggestions'].append('Improve answer coherence')
-            feedback['suggestions'].append('Address all aspects of the query')
-        
-        return feedback
+        return domains
 
-
-# ============================================================================
-# Supporting Infrastructure Components
-# ============================================================================
-
-class MessageBroker:
-    """
-    Manages inter-agent communication and message routing.
-    
-    TODO:
-    - Implement priority queues
-    - Add dead letter queue for failed messages
-    - Implement message persistence
-    """
-    
-    def __init__(self):
-        self.queues = defaultdict(asyncio.Queue)
-        self.subscriptions = defaultdict(list)
-    
-    async def publish(self, message: AgentMessage):
-        """Publish message to appropriate queue(s)"""
-        recipient = message.header.get('recipient_agent')
+    async def _generate_domain_queries(self, query: str, domains: List[str]) -> Dict[str, str]:
+        """
+        Generate domain-specific queries.
         
-        if recipient:
-            await self.queues[recipient].put(message)
-        else:
-            # Broadcast to all subscribed agents
-            for agent_id in self.subscriptions.get(message.header['message_type'], []):
-                await self.queues[agent_id].put(message)
-    
-    async def subscribe(self, agent_id: str, message_types: List[MessageType]):
-        """Subscribe agent to specific message types"""
-        for msg_type in message_types:
-            if agent_id not in self.subscriptions[msg_type]:
-                self.subscriptions[msg_type].append(agent_id)
-    
-    async def get_message(self, agent_id: str, timeout: Optional[float] = None) -> Optional[AgentMessage]:
-        """Get next message for agent with optional timeout"""
-        try:
-            if timeout:
-                return await asyncio.wait_for(
-                    self.queues[agent_id].get(),
-                    timeout=timeout
-                )
+        Args:
+            query: Original query
+            domains: Detected domains
+            
+        Returns:
+            Domain-specific queries
+        """
+        domain_queries = {}
+        
+        for domain in domains:
+            if domain == 'scientific':
+                domain_queries[domain] = f"scientific research {query}"
+            elif domain == 'news':
+                domain_queries[domain] = f"recent news {query}"
+            elif domain == 'technology':
+                domain_queries[domain] = f"technology {query}"
+            elif domain == 'academic':
+                domain_queries[domain] = f"academic sources {query}"
+            elif domain == 'business':
+                domain_queries[domain] = f"business information {query}"
             else:
-                return await self.queues[agent_id].get()
-        except asyncio.TimeoutError:
-            return None
+                domain_queries[domain] = query
+        
+        return domain_queries
 
+
+# ============================================================================
+# Supporting Classes (Simplified)
+# ============================================================================
 
 class TokenBudgetController:
-    """
-    Manages token allocation and usage tracking.
-    
-    TODO:
-    - Implement per-model token costs
-    - Add budget alerts and limits
-    - Track historical usage patterns
-    """
+    """Simplified token budget controller."""
     
     def __init__(self, daily_budget: int = None):
-        self.daily_budget = daily_budget or int(os.getenv('DAILY_TOKEN_BUDGET', '1000000'))
-        self.used_today = 0
-        self.agent_allocations = {
-            AgentType.RETRIEVAL: 0.15,
-            AgentType.FACT_CHECK: 0.20,
-            AgentType.SYNTHESIS: 0.50,
-            AgentType.CITATION: 0.10,
-            'buffer': 0.05
-        }
+        self.daily_budget = daily_budget or 1000000
+        self.used_tokens = defaultdict(int)
     
     def allocate_budget_for_query(self, query: str) -> int:
-        """Allocate token budget based on query complexity"""
-        # Simple heuristic based on query length
-        base_budget = 1000
-        length_multiplier = min(len(query) / 50, 3.0)
-        
-        allocated = int(base_budget * length_multiplier)
-        
-        # Check against remaining daily budget
-        remaining = self.daily_budget - self.used_today
-        if allocated > remaining * 0.1:  # Don't use more than 10% of remaining
-            allocated = int(remaining * 0.1)
-        
-        return allocated
+        """Allocate token budget for a query."""
+        return min(10000, len(query.split()) * 10)
     
     def track_usage(self, agent_type: AgentType, tokens_used: int):
-        """Track token usage by agent"""
-        self.used_today += tokens_used
-        # TODO: Implement detailed tracking and analytics
-    
-    def get_agent_budget(self, agent_type: AgentType, total_budget: int) -> int:
-        """Get token allocation for specific agent"""
-        allocation_percentage = self.agent_allocations.get(agent_type, 0.1)
-        return int(total_budget * allocation_percentage)
+        """Track token usage for an agent."""
+        self.used_tokens[agent_type] += tokens_used
 
 
 class SemanticCacheManager:
-    """
-    Manages semantic caching for query results.
-    
-    TODO:
-    - Implement embedding-based similarity search
-    - Add cache eviction policies
-    - Implement distributed caching
-    """
+    """Simplified semantic cache manager with thread safety."""
     
     def __init__(self, similarity_threshold: float = None):
+        self.similarity_threshold = similarity_threshold or 0.92
         self.cache = {}
-        self.embeddings = {}
-        self.similarity_threshold = similarity_threshold or float(os.getenv('CACHE_SIMILARITY_THRESHOLD', '0.95'))
-        self.max_cache_size = int(os.getenv('MAX_CACHE_SIZE', '10000'))
+        self._lock = asyncio.Lock()  # Add lock for thread safety
     
     async def get_cached_response(self, query: str) -> Optional[Dict[str, Any]]:
-        """
-        Check for semantically similar cached queries.
-        
-        TODO:
-        - Generate query embedding
-        - Search for similar queries in embedding space
-        - Return cached result if similarity exceeds threshold
-        """
-        # Direct cache hit
-        if query in self.cache:
-            logger.info("Direct cache hit")
-            return self.cache[query]
-        
-        # TODO: Implement semantic similarity search
-        # For now, return None
-        return None
+        """Get cached response for a query."""
+        async with self._lock:
+            # Simple exact match for now
+            return self.cache.get(query)
     
     async def cache_response(self, query: str, response: Dict[str, Any]):
-        """
-        Cache query response with embeddings.
-        
-        TODO:
-        - Generate and store query embedding
-        - Implement cache size management
-        - Add TTL support
-        """
-        if len(self.cache) >= self.max_cache_size:
-            # Simple FIFO eviction for now
-            oldest_key = next(iter(self.cache))
-            del self.cache[oldest_key]
-            if oldest_key in self.embeddings:
-                del self.embeddings[oldest_key]
-        
-        self.cache[query] = response
-        # TODO: Generate and store embedding
-    
-    def invalidate_cache(self, pattern: Optional[str] = None):
-        """Invalidate cached entries matching pattern"""
-        if pattern:
-            keys_to_remove = [k for k in self.cache.keys() if pattern in k]
-            for key in keys_to_remove:
-                del self.cache[key]
-                if key in self.embeddings:
-                    del self.embeddings[key]
-        else:
-            self.cache.clear()
-            self.embeddings.clear()
+        """Cache a response for a query."""
+        async with self._lock:
+            self.cache[query] = response
 
 
 class ResponseAggregator:
-    """
-    Aggregates results from multiple agents into final response.
-    
-    TODO:
-    - Implement sophisticated fusion algorithms
-    - Add quality scoring
-    - Handle partial failures gracefully
-    """
+    """Simplified response aggregator with fixed data format handling."""
     
     def __init__(self):
-        self.fusion_weights = {
-            'relevance': 0.25,
-            'accuracy': 0.30,
-            'completeness': 0.25,
-            'coherence': 0.20
-        }
+        pass
     
     def aggregate_pipeline_results(self, results: Dict[AgentType, AgentResult], context: QueryContext) -> Dict[str, Any]:
-        """Aggregate results from sequential pipeline execution"""
-        # Extract key components
-        synthesis_result = results.get(AgentType.SYNTHESIS, None)
-        citation_result = results.get(AgentType.CITATION, None)
+        """
+        Aggregate results from pipeline execution.
+        
+        Args:
+            results: Results from each agent
+            context: Query context
+            
+        Returns:
+            Final response with answer, confidence, and citations
+        """
+        # Check for critical failures
+        critical_failures = []
+        for agent_type, result in results.items():
+            if not result.success and agent_type in [AgentType.RETRIEVAL, AgentType.SYNTHESIS]:
+                critical_failures.append(f"{agent_type.value}: {result.error}")
+        
+        if critical_failures:
+            return {
+                'success': False,
+                'error': f"Critical agent failures: {'; '.join(critical_failures)}",
+                'answer': '',
+                'confidence': 0.0,
+                'citations': [],
+                'metadata': {
+                    'agents_used': [agent_type.value for agent_type in results.keys()],
+                    'trace_id': context.trace_id,
+                    'failed_agents': critical_failures
+                }
+            }
+        
+        # Extract synthesis result
+        synthesis_result = results.get(AgentType.SYNTHESIS)
+        citation_result = results.get(AgentType.CITATION)
         
         if not synthesis_result or not synthesis_result.success:
             return {
                 'success': False,
                 'error': 'Synthesis failed',
-                'partial_results': self._extract_partial_results(results)
+                'answer': '',
+                'confidence': 0.0,
+                'citations': [],
+                'metadata': {
+                    'agents_used': [agent_type.value for agent_type in results.keys()],
+                    'trace_id': context.trace_id
+                }
             }
         
-        response_text = synthesis_result.data.get('response', {}).get('text', '')
+        # Extract answer and confidence
+        answer = synthesis_result.data.get('answer', '')
+        confidence = synthesis_result.confidence
         
-        # Add citations if available
+        # Extract citations - handle both old and new formats
+        citations = []
         if citation_result and citation_result.success:
-            response_text = citation_result.data.get('cited_content', response_text)
-        
-        # Calculate aggregate confidence
-        total_confidence = 0
-        confidence_weights = 0
-        
-        for agent_type, result in results.items():
-            if result.success:
-                weight = 0.25  # Equal weight for now
-                total_confidence += result.confidence * weight
-                confidence_weights += weight
-        
-        aggregate_confidence = total_confidence / confidence_weights if confidence_weights > 0 else 0
-        
-        # Compile token usage
-        total_tokens = {'prompt': 0, 'completion': 0}
-        for result in results.values():
-            if result.success:
-                total_tokens['prompt'] += result.token_usage['prompt']
-                total_tokens['completion'] += result.token_usage['completion']
+            # Handle the correct data format from CitationAgent
+            citation_data = citation_result.data
+            if isinstance(citation_data, dict):
+                # New format: citations are in the 'citations' key
+                citations = citation_data.get('citations', [])
+            else:
+                # Fallback for old format
+                citations = citation_result.data or []
         
         return {
             'success': True,
-            'response': response_text,
-            'confidence': aggregate_confidence,
-            'citations': citation_result.data.get('bibliography', []) if citation_result else [],
-            'key_points': synthesis_result.data.get('response', {}).get('key_points', []),
-            'token_usage': total_tokens,
-            'agent_results': {str(k): v.data for k, v in results.items() if v.success}
-        }
-    
-    def aggregate_fork_join_results(self, results: Dict[AgentType, AgentResult], context: QueryContext) -> Dict[str, Any]:
-        """Aggregate results from fork-join execution"""
-        # Similar to pipeline but with special handling for parallel retrieval
-        return self.aggregate_pipeline_results(results, context)
-    
-    def aggregate_scatter_gather_results(self, domain_results: List[Dict[str, Any]], context: QueryContext) -> Dict[str, Any]:
-        """Aggregate results from scatter-gather execution"""
-        if not domain_results:
-            return {
-                'success': False,
-                'error': 'No domain results available'
+            'answer': answer,
+            'confidence': confidence,
+            'citations': citations,
+            'metadata': {
+                'agents_used': [agent_type.value for agent_type in results.keys()],
+                'trace_id': context.trace_id,
+                'synthesis_method': synthesis_result.data.get('synthesis_method', 'unknown'),
+                'fact_count': synthesis_result.data.get('fact_count', 0)
             }
-        
-        # Merge domain-specific responses
-        merged_response = "Based on analysis across multiple domains:\n\n"
-        all_citations = []
-        total_confidence = 0
-        
-        for i, domain_result in enumerate(domain_results):
-            if domain_result.get('success'):
-                merged_response += f"Domain {i+1} insights: {domain_result.get('response', '')}\n\n"
-                all_citations.extend(domain_result.get('citations', []))
-                total_confidence += domain_result.get('confidence', 0)
-        
-        return {
-            'success': True,
-            'response': merged_response,
-            'confidence': total_confidence / len(domain_results),
-            'citations': all_citations,
-            'domain_count': len(domain_results)
         }
-    
-    def aggregate_feedback_pipeline_results(self, results: Dict[str, Any], context: QueryContext) -> Dict[str, Any]:
-        """Aggregate results from feedback-enhanced pipeline"""
-        # Filter out feedback entries
-        agent_results = {k: v for k, v in results.items() if not k.endswith('_feedback')}
-        
-        # Add feedback metadata
-        feedback_count = sum(1 for k in results.keys() if k.endswith('_feedback'))
-        
-        base_result = self.aggregate_pipeline_results(agent_results, context)
-        base_result['quality_iterations'] = feedback_count
-        
-        return base_result
-    
-    def _extract_partial_results(self, results: Dict[AgentType, AgentResult]) -> Dict[str, Any]:
-        """Extract any useful information from partial results"""
-        partial = {}
-        
-        for agent_type, result in results.items():
-            if result.success and result.data:
-                partial[str(agent_type)] = result.data
-        
-        return partial
-
-
-# ============================================================================
-# FastAPI Integration (Optional)
-# ============================================================================
-
-from fastapi import FastAPI, HTTPException, BackgroundTasks
-from pydantic import BaseModel
-from typing import Optional
-
-app = FastAPI(title="Multi-Agent Knowledge Platform")
-
-# Request/Response models
-class QueryRequest(BaseModel):
-    query: str
-    user_id: Optional[str] = None
-    options: Optional[Dict[str, Any]] = None
-
-class QueryResponse(BaseModel):
-    success: bool
-    response: Optional[str] = None
-    confidence: Optional[float] = None
-    citations: Optional[List[Dict[str, Any]]] = None
-    error: Optional[str] = None
-    execution_time_ms: Optional[int] = None
-
-# Initialize orchestrator
-orchestrator = LeadOrchestrator()
-
-@app.post("/query", response_model=QueryResponse)
-async def process_query(request: QueryRequest, background_tasks: BackgroundTasks):
-    """
-    Process a user query through the multi-agent system.
-    
-    TODO:
-    - Add authentication/authorization
-    - Implement rate limiting
-    - Add request validation
-    """
-    try:
-        result = await orchestrator.process_query(
-            query=request.query,
-            user_context={'user_id': request.user_id} if request.user_id else None
-        )
-        
-        # TODO: Add background analytics tracking
-        # background_tasks.add_task(track_query_analytics, request, result)
-        
-        return QueryResponse(
-            success=result.get('success', False),
-            response=result.get('response'),
-            confidence=result.get('confidence'),
-            citations=result.get('citations'),
-            execution_time_ms=result.get('execution_time_ms')
-        )
-        
-    except Exception as e:
-        logger.error(f"API error: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/health")
-async def health_check():
-    """System health check endpoint"""
-    # TODO: Implement comprehensive health checks
-    return {
-        "status": "healthy",
-        "agents": {
-            str(agent_type): "active" 
-            for agent_type in orchestrator.agents.keys()
-        },
-        "timestamp": datetime.utcnow().isoformat()
-    }
-
-@app.get("/metrics")
-async def get_metrics():
-    """
-    Get system metrics.
-    
-    TODO:
-    - Implement Prometheus metrics export
-    - Add detailed agent-level metrics
-    - Include cache hit rates
-    """
-    return {
-        "total_queries": 0,  # TODO: Track this
-        "cache_hit_rate": 0.0,  # TODO: Calculate from cache manager
-        "average_response_time_ms": 0,  # TODO: Track this
-        "token_usage_today": orchestrator.token_controller.used_today
-    }
-
-
-# ============================================================================
-# Main Entry Point
-# ============================================================================
-
-async def main():
-    """
-    Main function to run the multi-agent system.
-    
-    TODO:
-    - Add configuration loading
-    - Initialize external connections (vector DB, LLMs, etc.)
-    - Set up monitoring/logging
-    """
-    # Example usage
-    orchestrator = LeadOrchestrator()
-    
-    # Process a sample query
-    result = await orchestrator.process_query(
-        "What are the latest developments in quantum computing?"
-    )
-    
-    print(f"Response: {result.get('response', 'No response generated')}")
-    print(f"Confidence: {result.get('confidence', 0):.2f}")
-    print(f"Execution time: {result.get('execution_time_ms', 0)}ms")
-
-
-if __name__ == "__main__":
-    # Run the FastAPI app
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
-    
-    # Or run standalone
-    asyncio.run(main())
 
 
 

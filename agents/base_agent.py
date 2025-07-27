@@ -89,6 +89,7 @@ class QueryContext:
     timeout_ms: int = int(os.getenv('AGENT_TIMEOUT_MS', '5000'))
     user_context: Optional[Dict[str, Any]] = field(default_factory=dict)
     metadata: Dict[str, Any] = field(default_factory=dict)
+    trace_id: Optional[str] = None
 
 
 @dataclass

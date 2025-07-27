@@ -13,12 +13,16 @@ from datetime import datetime, timedelta
 import logging
 from collections import OrderedDict
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
 
 logger = logging.getLogger(__name__)
+
+# Global thread pool for CPU-intensive operations
+_cache_thread_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="cache")
 
 
 @dataclass
@@ -48,7 +52,7 @@ class CacheEntry:
 
 
 class LRUCache:
-    """Least Recently Used cache implementation."""
+    """Least Recently Used cache implementation with async operations."""
     
     def __init__(self, max_size: int = 1000):
         self.max_size = max_size
@@ -59,148 +63,184 @@ class LRUCache:
             'evictions': 0,
             'size': 0
         }
+        self._lock = asyncio.Lock()
     
-    def get(self, key: str) -> Optional[Any]:
-        """Get value from cache."""
-        if key in self.cache:
-            entry = self.cache[key]
-            if not entry.is_expired():
-                # Move to end (most recently used)
-                self.cache.move_to_end(key)
-                entry.access()
-                self.stats['hits'] += 1
-                return entry.value
-            else:
-                # Remove expired entry
+    async def get(self, key: str) -> Optional[Any]:
+        """Get value from cache (async)."""
+        async with self._lock:
+            if key in self.cache:
+                entry = self.cache[key]
+                if not entry.is_expired():
+                    # Move to end (most recently used)
+                    self.cache.move_to_end(key)
+                    entry.access()
+                    self.stats['hits'] += 1
+                    return entry.value
+                else:
+                    # Remove expired entry
+                    del self.cache[key]
+                    self.stats['size'] -= 1
+            
+            self.stats['misses'] += 1
+            return None
+    
+    async def put(self, key: str, value: Any, ttl: int = 3600, metadata: Dict[str, Any] = None) -> None:
+        """Put value in cache (async)."""
+        async with self._lock:
+            # Remove if exists
+            if key in self.cache:
                 del self.cache[key]
                 self.stats['size'] -= 1
-        
-        self.stats['misses'] += 1
-        return None
+            
+            # Evict oldest if cache is full
+            while len(self.cache) >= self.max_size:
+                oldest_key = next(iter(self.cache))
+                del self.cache[oldest_key]
+                self.stats['evictions'] += 1
+                self.stats['size'] -= 1
+            
+            # Add new entry
+            entry = CacheEntry(
+                key=key,
+                value=value,
+                timestamp=time.time(),
+                ttl=ttl,
+                metadata=metadata or {}
+            )
+            
+            self.cache[key] = entry
+            self.stats['size'] += 1
     
-    def put(self, key: str, value: Any, ttl: int = 3600, metadata: Dict[str, Any] = None) -> None:
-        """Put value in cache."""
-        # Remove if exists
-        if key in self.cache:
-            del self.cache[key]
-            self.stats['size'] -= 1
-        
-        # Evict oldest if cache is full
-        while len(self.cache) >= self.max_size:
-            oldest_key = next(iter(self.cache))
-            del self.cache[oldest_key]
-            self.stats['evictions'] += 1
-            self.stats['size'] -= 1
-        
-        # Add new entry
-        entry = CacheEntry(
-            key=key,
-            value=value,
-            timestamp=time.time(),
-            ttl=ttl,
-            metadata=metadata or {}
-        )
-        self.cache[key] = entry
-        self.stats['size'] += 1
-    
-    def clear(self):
+    async def clear(self):
         """Clear all cache entries."""
-        self.cache.clear()
-        self.stats['size'] = 0
+        async with self._lock:
+            self.cache.clear()
+            self.stats['size'] = 0
     
     def get_stats(self) -> Dict[str, Any]:
         """Get cache statistics."""
-        hit_rate = self.stats['hits'] / (self.stats['hits'] + self.stats['misses']) if (self.stats['hits'] + self.stats['misses']) > 0 else 0
         return {
             **self.stats,
-            'hit_rate': hit_rate,
-            'current_size': len(self.cache)
+            'max_size': self.max_size,
+            'hit_rate': self.stats['hits'] / (self.stats['hits'] + self.stats['misses']) if (self.stats['hits'] + self.stats['misses']) > 0 else 0
         }
 
 
 class QueryCache:
-    """Specialized cache for query results."""
+    """Optimized query cache with reduced memory usage."""
     
     def __init__(self, max_size: int = 500):
         self.cache = LRUCache(max_size)
-        self.query_patterns = {
-            'factual': int(os.getenv('FACTUAL_QUERY_TTL', '1800')),  # 30 minutes
-            'analytical': int(os.getenv('ANALYTICAL_QUERY_TTL', '3600')),  # 1 hour
-            'creative': int(os.getenv('CREATIVE_QUERY_TTL', '7200')),  # 2 hours
-            'default': int(os.getenv('DEFAULT_QUERY_TTL', '3600'))  # 1 hour
-        }
     
-    def _generate_key(self, query: str, user_context: Dict[str, Any] = None) -> str:
-        """Generate cache key from query and context."""
-        # Normalize query
-        normalized_query = query.strip().lower()
-        
-        # Create context hash
-        context_hash = ""
+    def _generate_key_sync(self, query: str, user_context: Dict[str, Any] = None) -> str:
+        """Generate cache key (synchronous version for thread pool)."""
+        # Create a simplified context for hashing
+        context_str = ""
         if user_context:
-            # Sort keys for consistent hashing
-            sorted_context = json.dumps(user_context, sort_keys=True)
-            context_hash = hashlib.md5(sorted_context.encode()).hexdigest()
+            # Only include essential context fields to reduce key size
+            essential_context = {
+                'user_id': user_context.get('user_id'),
+                'session_id': user_context.get('session_id'),
+                'preferences': user_context.get('preferences', {})
+            }
+            context_str = json.dumps(essential_context, sort_keys=True)
         
-        # Combine query and context
-        combined = f"{normalized_query}:{context_hash}"
-        return hashlib.md5(combined.encode()).hexdigest()
+        # Create hash of query + context
+        key_data = f"{query}:{context_str}".encode('utf-8')
+        return hashlib.md5(key_data).hexdigest()
+    
+    async def _generate_key(self, query: str, user_context: Dict[str, Any] = None) -> str:
+        """Generate cache key (async)."""
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            _cache_thread_pool,
+            self._generate_key_sync,
+            query,
+            user_context
+        )
     
     def _determine_ttl(self, query: str, result: Dict[str, Any]) -> int:
-        """Determine TTL based on query type and result confidence."""
+        """Determine TTL based on query and result characteristics."""
+        # Base TTL
+        ttl = 3600  # 1 hour default
+        
+        # Adjust based on query type
         query_lower = query.lower()
+        if any(word in query_lower for word in ['news', 'current', 'recent', 'latest']):
+            ttl = 1800  # 30 minutes for time-sensitive queries
+        elif any(word in query_lower for word in ['definition', 'what is', 'meaning']):
+            ttl = 7200  # 2 hours for definition queries
+        elif any(word in query_lower for word in ['research', 'study', 'analysis']):
+            ttl = 14400  # 4 hours for research queries
         
-        # Check for factual queries
-        if any(word in query_lower for word in ['what is', 'who is', 'when', 'where', 'how many']):
-            return self.query_patterns['factual']
+        # Adjust based on result confidence
+        confidence = result.get('confidence', 0.0)
+        if confidence > 0.9:
+            ttl = int(ttl * 1.5)  # Longer TTL for high-confidence results
+        elif confidence < 0.5:
+            ttl = int(ttl * 0.5)  # Shorter TTL for low-confidence results
         
-        # Check for analytical queries
-        if any(word in query_lower for word in ['compare', 'analyze', 'explain', 'why']):
-            return self.query_patterns['analytical']
-        
-        # Check for creative queries
-        if any(word in query_lower for word in ['imagine', 'create', 'design', 'suggest']):
-            return self.query_patterns['creative']
-        
-        # Default TTL
-        return self.query_patterns['default']
+        return ttl
     
-    def get(self, query: str, user_context: Dict[str, Any] = None) -> Optional[Dict[str, Any]]:
-        """Get cached query result."""
-        key = self._generate_key(query, user_context)
-        return self.cache.get(key)
-    
-    def put(self, query: str, result: Dict[str, Any], user_context: Dict[str, Any] = None) -> None:
-        """Cache query result."""
-        key = self._generate_key(query, user_context)
-        ttl = self._determine_ttl(query, result)
-        
-        # Add cache metadata
-        metadata = {
-            'query_type': 'cached',
-            'original_query': query,
-            'user_context': user_context,
+    def _optimize_result_for_cache(self, result: Dict[str, Any]) -> Dict[str, Any]:
+        """Optimize result for caching by removing unnecessary data."""
+        # Create a minimal cached version
+        cached_result = {
+            'answer': result.get('answer', ''),
             'confidence': result.get('confidence', 0.0),
-            'cached_at': datetime.now().isoformat()
+            'citations': result.get('citations', []),
+            'metadata': {
+                'agents_used': result.get('metadata', {}).get('agents_used', []),
+                'synthesis_method': result.get('metadata', {}).get('synthesis_method', 'unknown'),
+                'fact_count': result.get('metadata', {}).get('fact_count', 0)
+            }
         }
         
-        self.cache.put(key, result, ttl, metadata)
+        # Limit citation data to essential fields
+        optimized_citations = []
+        for citation in cached_result['citations']:
+            optimized_citation = {
+                'title': citation.get('title', ''),
+                'url': citation.get('url', ''),
+                'author': citation.get('author', ''),
+                'year': citation.get('year', '')
+            }
+            optimized_citations.append(optimized_citation)
+        
+        cached_result['citations'] = optimized_citations
+        return cached_result
     
-    def get_stats(self) -> Dict[str, Any]:
+    async def get(self, query: str, user_context: Dict[str, Any] = None) -> Optional[Dict[str, Any]]:
+        """Get cached result (async)."""
+        key = await self._generate_key(query, user_context)
+        return await self.cache.get(key)
+    
+    async def put(self, query: str, result: Dict[str, Any], user_context: Dict[str, Any] = None) -> None:
+        """Put result in cache (async)."""
+        key = await self._generate_key(query, user_context)
+        optimized_result = self._optimize_result_for_cache(result)
+        ttl = self._determine_ttl(query, result)
+        
+        await self.cache.put(key, optimized_result, ttl, {
+            'original_query': query,
+            'user_context_keys': list(user_context.keys()) if user_context else []
+        })
+    
+    async def get_stats(self) -> Dict[str, Any]:
         """Get cache statistics."""
         return self.cache.get_stats()
 
 
 class SemanticCache:
-    """Semantic similarity-based cache."""
+    """Semantic cache for similar queries."""
     
     def __init__(self, max_size: int = 200):
         self.cache = LRUCache(max_size)
         self.similarity_threshold = 0.85
     
-    def _calculate_similarity(self, query1: str, query2: str) -> float:
-        """Calculate semantic similarity between queries."""
-        # Simple implementation - can be enhanced with embeddings
+    def _calculate_similarity_sync(self, query1: str, query2: str) -> float:
+        """Calculate similarity between queries (synchronous version)."""
+        # Simple word overlap similarity
         words1 = set(query1.lower().split())
         words2 = set(query2.lower().split())
         
@@ -212,73 +252,72 @@ class SemanticCache:
         
         return len(intersection) / len(union)
     
-    def find_similar(self, query: str) -> Optional[Dict[str, Any]]:
-        """Find semantically similar cached query."""
-        best_match = None
-        best_similarity = 0.0
-        
-        for key, entry in self.cache.cache.items():
-            if entry.is_expired():
-                continue
-            
-            cached_query = entry.metadata.get('original_query', '')
-            similarity = self._calculate_similarity(query, cached_query)
-            
-            if similarity > self.similarity_threshold and similarity > best_similarity:
-                best_similarity = similarity
-                best_match = entry.value
-        
-        return best_match
+    async def _calculate_similarity(self, query1: str, query2: str) -> float:
+        """Calculate similarity between queries (async)."""
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            _cache_thread_pool,
+            self._calculate_similarity_sync,
+            query1,
+            query2
+        )
     
-    def put(self, query: str, result: Dict[str, Any], user_context: Dict[str, Any] = None) -> None:
-        """Cache query with semantic metadata."""
-        key = hashlib.md5(query.encode()).hexdigest()
-        ttl = int(os.getenv('SEMANTIC_QUERY_TTL', '3600'))  # 1 hour default
+    async def find_similar(self, query: str) -> Optional[Dict[str, Any]]:
+        """Find similar cached query (async)."""
+        # Check all cached entries for similarity
+        async with self.cache._lock:
+            for key, entry in self.cache.cache.items():
+                if not entry.is_expired():
+                    cached_query = entry.metadata.get('original_query', '')
+                    if cached_query:
+                        similarity = await self._calculate_similarity(query, cached_query)
+                        if similarity >= self.similarity_threshold:
+                            return entry.value
         
-        metadata = {
+        return None
+    
+    async def put(self, query: str, result: Dict[str, Any], user_context: Dict[str, Any] = None) -> None:
+        """Put result in semantic cache (async)."""
+        # Use a hash of the query as key
+        key = hashlib.md5(query.encode('utf-8')).hexdigest()
+        
+        await self.cache.put(key, result, 3600, {
             'original_query': query,
-            'user_context': user_context,
-            'semantic_key': key
-        }
-        
-        self.cache.put(key, result, ttl, metadata)
+            'user_context_keys': list(user_context.keys()) if user_context else []
+        })
 
 
 # Global cache instances
-query_cache = QueryCache()
-semantic_cache = SemanticCache()
+_query_cache = QueryCache()
+_semantic_cache = SemanticCache()
 
 
 async def get_cached_result(query: str, user_context: Dict[str, Any] = None) -> Optional[Dict[str, Any]]:
-    """Get cached result for query."""
-    # Try exact match first
-    result = query_cache.get(query, user_context)
+    """Get cached result for query (async)."""
+    # First check exact match
+    result = await _query_cache.get(query, user_context)
     if result:
-        logger.info(f"Cache HIT (exact): {query[:50]}...")
         return result
     
-    # Try semantic similarity
-    result = semantic_cache.find_similar(query)
-    if result:
-        logger.info(f"Cache HIT (semantic): {query[:50]}...")
-        return result
-    
-    logger.info(f"Cache MISS: {query[:50]}...")
-    return None
+    # Then check semantic similarity
+    result = await _semantic_cache.find_similar(query)
+    return result
 
 
 async def cache_result(query: str, result: Dict[str, Any], user_context: Dict[str, Any] = None) -> None:
-    """Cache query result."""
+    """Cache result for query (async)."""
     # Cache in both exact and semantic caches
-    query_cache.put(query, result, user_context)
-    semantic_cache.put(query, result, user_context)
-    logger.info(f"Cached result for: {query[:50]}...")
+    await _query_cache.put(query, result, user_context)
+    await _semantic_cache.put(query, result, user_context)
 
 
-def get_cache_stats() -> Dict[str, Any]:
+async def get_cache_stats() -> Dict[str, Any]:
     """Get comprehensive cache statistics."""
+    query_stats = await _query_cache.get_stats()
+    semantic_stats = await _semantic_cache.cache.get_stats()
+    
     return {
-        'query_cache': query_cache.get_stats(),
-        'semantic_cache': semantic_cache.cache.get_stats(),
-        'total_entries': query_cache.cache.stats['size'] + semantic_cache.cache.stats['size']
+        'query_cache': query_stats,
+        'semantic_cache': semantic_stats,
+        'total_memory_usage': query_stats['size'] + semantic_stats['size']
     } 

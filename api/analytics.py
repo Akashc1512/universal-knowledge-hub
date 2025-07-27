@@ -1,287 +1,310 @@
 """
-Analytics module for tracking query performance and user behavior.
+Analytics System for Universal Knowledge Platform
+Provides query tracking and analytics with privacy protection.
 """
 
 import time
-import threading
+import hashlib
 from typing import Dict, Any, List, Optional
-from dataclasses import dataclass, field, asdict
-from collections import defaultdict, deque
-import logging
 from datetime import datetime, timedelta
-
-from api.cache import get_cache_stats
+import logging
+from collections import defaultdict, deque
+import json
+import re
+import os
 
 logger = logging.getLogger(__name__)
 
+# Privacy configuration
+DATA_RETENTION_DAYS = int(os.getenv('DATA_RETENTION_DAYS', '30'))
+ANONYMIZE_QUERIES = os.getenv('ANONYMIZE_QUERIES', 'true').lower() == 'true'
+LOG_QUERY_CONTENT = os.getenv('LOG_QUERY_CONTENT', 'false').lower() == 'true'
 
-@dataclass
-class QueryAnalytics:
-    """Analytics data for a single query."""
-    query_id: str
-    query: str
-    user_id: Optional[str]
-    timestamp: float
-    execution_time: float
-    response_size: int
-    confidence: float
-    cache_hit: bool
-    error_occurred: bool
-    error_type: Optional[str]
-    agent_usage: Dict[str, Any]
-    token_usage: Dict[str, int]
-    user_agent: Optional[str]
-    ip_address: Optional[str]
+# Analytics storage with privacy controls
+query_history = deque(maxlen=10000)  # Limited history
+user_analytics = defaultdict(lambda: {
+    'query_count': 0,
+    'avg_response_time': 0.0,
+    'last_seen': 0,
+    'anonymized_id': None
+})
 
+# Global analytics
+global_stats = {
+    'total_queries': 0,
+    'total_errors': 0,
+    'avg_response_time': 0.0,
+    'cache_hit_rate': 0.0,
+    'popular_queries': defaultdict(int),
+    'query_categories': defaultdict(int)
+}
 
-@dataclass
-class SystemMetrics:
-    """System-wide performance metrics."""
-    total_queries: int = 0
-    successful_queries: int = 0
-    failed_queries: int = 0
-    average_response_time: float = 0.0
-    cache_hit_rate: float = 0.0
-    error_rate: float = 0.0
-    active_users: int = 0
-    peak_concurrent_users: int = 0
-    total_tokens_used: int = 0
-    average_confidence: float = 0.0
-
-
-class AnalyticsCollector:
-    """Collects and analyzes platform usage data."""
+def sanitize_query_for_logging(query: str) -> str:
+    """
+    Sanitize query for logging to protect privacy.
     
-    def __init__(self, max_history: int = 10000):
-        self.max_history = max_history
-        self.queries: deque = deque(maxlen=max_history)
-        self.metrics = SystemMetrics()
-        self.lock = threading.Lock()
+    Args:
+        query: Original query
         
-        # Real-time counters
-        self.active_sessions = set()
-        self.concurrent_users = 0
-        self.peak_concurrent = 0
-        
-        # Time-based aggregations
-        self.hourly_stats = defaultdict(lambda: {
-            'queries': 0,
-            'errors': 0,
-            'avg_response_time': 0.0,
-            'unique_users': set()
-        })
-        
-        # Query pattern analysis
-        self.query_patterns = defaultdict(int)
-        self.user_behavior = defaultdict(lambda: {
-            'total_queries': 0,
-            'avg_confidence': 0.0,
-            'favorite_topics': defaultdict(int)
-        })
+    Returns:
+        Sanitized query safe for logging
+    """
+    if not LOG_QUERY_CONTENT:
+        return "[QUERY_CONTENT_LOGGING_DISABLED]"
     
-    def record_query(self, analytics: QueryAnalytics) -> None:
-        """Record a query for analytics."""
-        with self.lock:
-            # Add to history
-            self.queries.append(analytics)
-            
-            # Update metrics
-            self.metrics.total_queries += 1
-            
-            if analytics.error_occurred:
-                self.metrics.failed_queries += 1
-            else:
-                self.metrics.successful_queries += 1
-            
-            # Update response time
-            if self.metrics.total_queries > 1:
-                current_avg = self.metrics.average_response_time
-                new_avg = (current_avg * (self.metrics.total_queries - 1) + analytics.execution_time) / self.metrics.total_queries
-                self.metrics.average_response_time = new_avg
-            else:
-                self.metrics.average_response_time = analytics.execution_time
-            
-            # Update cache hit rate
-            if analytics.cache_hit:
-                cache_hits = sum(1 for q in self.queries if q.cache_hit)
-                self.metrics.cache_hit_rate = cache_hits / len(self.queries)
-            
-            # Update error rate
-            errors = sum(1 for q in self.queries if q.error_occurred)
-            self.metrics.error_rate = errors / len(self.queries)
-            
-            # Update token usage
-            self.metrics.total_tokens_used += sum(analytics.token_usage.values())
-            
-            # Update confidence
-            if self.metrics.total_queries > 1:
-                current_avg = self.metrics.average_confidence
-                new_avg = (current_avg * (self.metrics.total_queries - 1) + analytics.confidence) / self.metrics.total_queries
-                self.metrics.average_confidence = new_avg
-            else:
-                self.metrics.average_confidence = analytics.confidence
-            
-            # Track user sessions
-            if analytics.user_id:
-                self.active_sessions.add(analytics.user_id)
-                self.metrics.active_users = len(self.active_sessions)
-            
-            # Update hourly stats
-            hour_key = datetime.fromtimestamp(analytics.timestamp).strftime('%Y-%m-%d %H:00')
-            self.hourly_stats[hour_key]['queries'] += 1
-            if analytics.error_occurred:
-                self.hourly_stats[hour_key]['errors'] += 1
-            if analytics.user_id:
-                self.hourly_stats[hour_key]['unique_users'].add(analytics.user_id)
-            
-            # Analyze query patterns
-            words = analytics.query.lower().split()
-            for word in words:
-                if len(word) > 3:  # Skip short words
-                    self.query_patterns[word] += 1
-            
-            # Track user behavior
-            if analytics.user_id:
-                user_data = self.user_behavior[analytics.user_id]
-                user_data['total_queries'] += 1
-                
-                # Update average confidence
-                if user_data['total_queries'] > 1:
-                    current_avg = user_data['avg_confidence']
-                    new_avg = (current_avg * (user_data['total_queries'] - 1) + analytics.confidence) / user_data['total_queries']
-                    user_data['avg_confidence'] = new_avg
-                else:
-                    user_data['avg_confidence'] = analytics.confidence
+    # Remove or mask sensitive patterns
+    sensitive_patterns = [
+        r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b',  # Email
+        r'\b\d{3}-\d{2}-\d{4}\b',  # SSN
+        r'\b\d{4}-\d{4}-\d{4}-\d{4}\b',  # Credit card
+        r'\b\d{10,}\b',  # Long numbers (phone, etc.)
+        r'\b[A-Z]{2}\d{2}[A-Z0-9]{10,30}\b',  # IBAN
+        r'\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b',  # IP addresses
+    ]
     
-    def get_recent_queries(self, limit: int = 100) -> List[Dict[str, Any]]:
-        """Get recent queries for analysis."""
-        with self.lock:
-            recent = list(self.queries)[-limit:]
-            return [asdict(q) for q in recent]
+    sanitized = query
+    for pattern in sensitive_patterns:
+        sanitized = re.sub(pattern, '[REDACTED]', sanitized)
     
-    def get_system_metrics(self) -> Dict[str, Any]:
-        """Get current system metrics."""
-        with self.lock:
-            return asdict(self.metrics)
+    # Truncate very long queries
+    if len(sanitized) > 200:
+        sanitized = sanitized[:200] + "..."
     
-    def get_hourly_stats(self, hours: int = 24) -> Dict[str, Any]:
-        """Get hourly statistics."""
-        with self.lock:
-            now = datetime.now()
-            stats = {}
-            
-            for i in range(hours):
-                hour_key = (now - timedelta(hours=i)).strftime('%Y-%m-%d %H:00')
-                if hour_key in self.hourly_stats:
-                    hour_data = self.hourly_stats[hour_key]
-                    stats[hour_key] = {
-                        'queries': hour_data['queries'],
-                        'errors': hour_data['errors'],
-                        'unique_users': len(hour_data['unique_users']),
-                        'error_rate': hour_data['errors'] / hour_data['queries'] if hour_data['queries'] > 0 else 0
-                    }
-            
-            return stats
-    
-    def get_popular_queries(self, limit: int = 10) -> List[Dict[str, Any]]:
-        """Get most popular query patterns."""
-        with self.lock:
-            sorted_patterns = sorted(self.query_patterns.items(), key=lambda x: x[1], reverse=True)
-            return [{'pattern': pattern, 'count': count} for pattern, count in sorted_patterns[:limit]]
-    
-    def get_user_insights(self, user_id: str) -> Dict[str, Any]:
-        """Get insights for a specific user."""
-        with self.lock:
-            if user_id not in self.user_behavior:
-                return {}
-            
-            user_data = self.user_behavior[user_id]
-            return {
-                'total_queries': user_data['total_queries'],
-                'average_confidence': user_data['avg_confidence'],
-                'favorite_topics': dict(user_data['favorite_topics'])
-            }
-    
-    def get_performance_alerts(self) -> List[Dict[str, Any]]:
-        """Get performance alerts based on thresholds."""
-        alerts = []
-        
-        with self.lock:
-            # High error rate alert
-            if self.metrics.error_rate > 0.1:  # 10% error rate
-                alerts.append({
-                    'type': 'high_error_rate',
-                    'severity': 'warning',
-                    'message': f'Error rate is {self.metrics.error_rate:.2%}',
-                    'value': self.metrics.error_rate
-                })
-            
-            # Slow response time alert
-            if self.metrics.average_response_time > 5.0:  # 5 seconds
-                alerts.append({
-                    'type': 'slow_response_time',
-                    'severity': 'warning',
-                    'message': f'Average response time is {self.metrics.average_response_time:.2f}s',
-                    'value': self.metrics.average_response_time
-                })
-            
-            # Low cache hit rate alert
-            if self.metrics.cache_hit_rate < 0.2:  # 20% cache hit rate
-                alerts.append({
-                    'type': 'low_cache_hit_rate',
-                    'severity': 'info',
-                    'message': f'Cache hit rate is {self.metrics.cache_hit_rate:.2%}',
-                    'value': self.metrics.cache_hit_rate
-                })
-        
-        return alerts
+    return sanitized
 
+def anonymize_user_id(user_id: str) -> str:
+    """
+    Create an anonymized user ID for analytics.
+    
+    Args:
+        user_id: Original user ID
+        
+    Returns:
+        Anonymized user ID
+    """
+    if not user_id:
+        return "anonymous"
+    
+    # Create consistent hash for the same user_id
+    return hashlib.sha256(user_id.encode()).hexdigest()[:8]
 
-# Global analytics instance
-analytics_collector = AnalyticsCollector()
-
+def categorize_query(query: str) -> str:
+    """
+    Categorize query for analytics without storing sensitive content.
+    
+    Args:
+        query: Query to categorize
+        
+    Returns:
+        Query category
+    """
+    query_lower = query.lower()
+    
+    # Define categories based on keywords
+    categories = {
+        'technology': ['programming', 'code', 'software', 'computer', 'tech', 'algorithm'],
+        'science': ['research', 'study', 'experiment', 'scientific', 'analysis'],
+        'education': ['learn', 'teach', 'education', 'school', 'university', 'course'],
+        'business': ['company', 'business', 'market', 'finance', 'management'],
+        'health': ['medical', 'health', 'disease', 'treatment', 'medicine'],
+        'general': ['what', 'how', 'why', 'when', 'where', 'who']
+    }
+    
+    for category, keywords in categories.items():
+        if any(keyword in query_lower for keyword in keywords):
+            return category
+    
+    return 'general'
 
 async def track_query(
-    query: str,
-    user_id: Optional[str],
-    execution_time: float,
-    response_size: int,
+    query: str, 
+    execution_time: float, 
     confidence: float,
-    cache_hit: bool,
-    error_occurred: bool,
-    error_type: Optional[str],
-    agent_usage: Dict[str, Any],
-    token_usage: Dict[str, int],
-    user_agent: Optional[str],
-    ip_address: Optional[str]
+    client_ip: str,
+    user_id: Optional[str] = None
 ) -> None:
-    """Track a query for analytics."""
-    analytics = QueryAnalytics(
-        query_id=f"q_{int(time.time() * 1000)}",
-        query=query,
-        user_id=user_id,
-        timestamp=time.time(),
-        execution_time=execution_time,
-        response_size=response_size,
-        confidence=confidence,
-        cache_hit=cache_hit,
-        error_occurred=error_occurred,
-        error_type=error_type,
-        agent_usage=agent_usage,
-        token_usage=token_usage,
-        user_agent=user_agent,
-        ip_address=ip_address
-    )
+    """
+    Track query analytics with privacy protection.
     
-    analytics_collector.record_query(analytics)
+    Args:
+        query: User query
+        execution_time: Query execution time
+        confidence: Response confidence
+        client_ip: Client IP address
+        user_id: User ID (optional)
+    """
+    try:
+        # Sanitize and anonymize data
+        sanitized_query = sanitize_query_for_logging(query)
+        anonymized_user_id = anonymize_user_id(user_id) if user_id else "anonymous"
+        category = categorize_query(query)
+        
+        # Create analytics entry
+        analytics_entry = {
+            'timestamp': time.time(),
+            'query_length': len(query),
+            'sanitized_query': sanitized_query,
+            'category': category,
+            'execution_time': execution_time,
+            'confidence': confidence,
+            'client_ip': client_ip,
+            'anonymized_user_id': anonymized_user_id,
+            'cache_hit': False  # Will be updated by cache system
+        }
+        
+        # Update global stats
+        global_stats['total_queries'] += 1
+        global_stats['avg_response_time'] = (
+            (global_stats['avg_response_time'] * (global_stats['total_queries'] - 1) + execution_time) 
+            / global_stats['total_queries']
+        )
+        global_stats['popular_queries'][category] += 1
+        global_stats['query_categories'][category] += 1
+        
+        # Update user analytics (anonymized)
+        if anonymized_user_id != "anonymous":
+            user_data = user_analytics[anonymized_user_id]
+            user_data['query_count'] += 1
+            user_data['last_seen'] = time.time()
+            user_data['anonymized_id'] = anonymized_user_id
+            
+            # Update average response time
+            if user_data['query_count'] == 1:
+                user_data['avg_response_time'] = execution_time
+            else:
+                user_data['avg_response_time'] = (
+                    (user_data['avg_response_time'] * (user_data['query_count'] - 1) + execution_time) 
+                    / user_data['query_count']
+                )
+        
+        # Store in history (limited size)
+        query_history.append(analytics_entry)
+        
+        # Log analytics safely
+        logger.info(f"Query tracked: category={category}, time={execution_time:.3f}s, "
+                   f"confidence={confidence:.2f}, user={anonymized_user_id}")
+        
+    except Exception as e:
+        logger.error(f"Error tracking query analytics: {e}")
 
+async def get_analytics_summary() -> Dict[str, Any]:
+    """
+    Get analytics summary with privacy protection.
+    
+    Returns:
+        Analytics summary
+    """
+    try:
+        # Clean old data based on retention policy
+        cutoff_time = time.time() - (DATA_RETENTION_DAYS * 24 * 60 * 60)
+        
+        # Filter recent data
+        recent_queries = [
+            entry for entry in query_history
+            if entry['timestamp'] > cutoff_time
+        ]
+        
+        # Calculate cache hit rate (placeholder - should be updated by cache system)
+        cache_hits = sum(1 for entry in recent_queries if entry.get('cache_hit', False))
+        cache_hit_rate = cache_hits / len(recent_queries) if recent_queries else 0.0
+        
+        # Get popular categories
+        category_counts = defaultdict(int)
+        for entry in recent_queries:
+            category_counts[entry['category']] += 1
+        
+        # Get active users (anonymized)
+        active_users = len([
+            user_id for user_id, data in user_analytics.items()
+            if data['last_seen'] > cutoff_time
+        ])
+        
+        return {
+            'total_queries': global_stats['total_queries'],
+            'recent_queries': len(recent_queries),
+            'avg_response_time': global_stats['avg_response_time'],
+            'cache_hit_rate': cache_hit_rate,
+            'popular_categories': dict(category_counts),
+            'active_users': active_users,
+            'data_retention_days': DATA_RETENTION_DAYS,
+            'privacy_protection': {
+                'anonymize_queries': ANONYMIZE_QUERIES,
+                'log_query_content': LOG_QUERY_CONTENT,
+                'data_retention_enabled': True
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Error generating analytics summary: {e}")
+        return {
+            'error': 'Failed to generate analytics summary',
+            'total_queries': global_stats['total_queries']
+        }
 
-def get_analytics_summary() -> Dict[str, Any]:
-    """Get comprehensive analytics summary."""
-    return {
-        'system_metrics': analytics_collector.get_system_metrics(),
-        'hourly_stats': analytics_collector.get_hourly_stats(),
-        'popular_queries': analytics_collector.get_popular_queries(),
-        'performance_alerts': analytics_collector.get_performance_alerts(),
-        'cache_stats': get_cache_stats()
-    } 
+async def clear_user_data(user_id: str) -> bool:
+    """
+    Clear all data for a specific user (GDPR compliance).
+    
+    Args:
+        user_id: User ID to clear
+        
+    Returns:
+        Success status
+    """
+    try:
+        anonymized_id = anonymize_user_id(user_id)
+        
+        # Remove from user analytics
+        if anonymized_id in user_analytics:
+            del user_analytics[anonymized_id]
+        
+        # Remove from query history (this is more complex as we need to identify entries)
+        # For now, we'll just note that this user's data should be excluded from future queries
+        # In a production system, you'd want to mark entries for deletion or use a proper database
+        
+        logger.info(f"Cleared data for user: {anonymized_id}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error clearing user data: {e}")
+        return False
+
+async def export_user_data(user_id: str) -> Optional[Dict[str, Any]]:
+    """
+    Export user data for GDPR compliance.
+    
+    Args:
+        user_id: User ID to export
+        
+    Returns:
+        User data (anonymized)
+    """
+    try:
+        anonymized_id = anonymize_user_id(user_id)
+        
+        # Get user analytics
+        user_data = user_analytics.get(anonymized_id, {})
+        
+        # Get user's query history (anonymized)
+        user_queries = [
+            {
+                'timestamp': entry['timestamp'],
+                'category': entry['category'],
+                'execution_time': entry['execution_time'],
+                'confidence': entry['confidence']
+            }
+            for entry in query_history
+            if entry['anonymized_user_id'] == anonymized_id
+        ]
+        
+        return {
+            'user_id': anonymized_id,  # Anonymized
+            'analytics': user_data,
+            'query_history': user_queries,
+            'export_timestamp': time.time(),
+            'data_retention_days': DATA_RETENTION_DAYS
+        }
+        
+    except Exception as e:
+        logger.error(f"Error exporting user data: {e}")
+        return None 

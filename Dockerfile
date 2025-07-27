@@ -1,5 +1,5 @@
-# Multi-stage build for Universal Knowledge Platform
-FROM python:3.11-slim as builder
+# Multi-stage Dockerfile for Universal Knowledge Platform
+FROM python:3.9-slim as builder
 
 # Set environment variables
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -23,44 +23,49 @@ RUN pip install --upgrade pip && \
     pip install -r requirements.txt
 
 # Production stage
-FROM python:3.11-slim as production
+FROM python:3.9-slim as production
 
 # Set environment variables
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PATH="/opt/venv/bin:$PATH"
+    UKP_HOST=0.0.0.0 \
+    UKP_PORT=8002 \
+    UKP_WORKERS=4 \
+    UKP_RELOAD=false \
+    UKP_LOG_LEVEL=info
 
 # Install runtime dependencies
 RUN apt-get update && apt-get install -y \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy virtual environment from builder stage
-COPY --from=builder /opt/venv /opt/venv
-
 # Create non-root user
-RUN groupadd -r appuser && useradd -r -g appuser appuser
+RUN groupadd -r ukp && useradd -r -g ukp ukp
 
-# Create app directory
+# Copy virtual environment from builder
+COPY --from=builder /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Create application directory
 WORKDIR /app
 
 # Copy application code
-COPY --chown=appuser:appuser . .
+COPY . .
 
-# Create necessary directories
+# Create necessary directories and set permissions
 RUN mkdir -p /app/logs /app/data && \
-    chown -R appuser:appuser /app
+    chown -R ukp:ukp /app
 
 # Switch to non-root user
-USER appuser
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8002/health || exit 1
+USER ukp
 
 # Expose port
 EXPOSE 8002
 
-# Run the application
-CMD ["python", "start_api.py"]
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8002/health || exit 1
+
+# Default command
+CMD ["python", "-m", "uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8002", "--workers", "4"]
 

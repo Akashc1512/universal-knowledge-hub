@@ -1,0 +1,310 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ukp-api
+  namespace: ukp
+  labels:
+    app: ukp-api
+    version: v1.0.0
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: ukp-api
+  template:
+    metadata:
+      labels:
+        app: ukp-api
+        version: v1.0.0
+    spec:
+      containers:
+      - name: ukp-api
+        image: universal-knowledge-platform:latest
+        ports:
+        - containerPort: 8002
+          name: http
+        env:
+        - name: UKP_HOST
+          value: "0.0.0.0"
+        - name: UKP_PORT
+          value: "8002"
+        - name: UKP_WORKERS
+          value: "4"
+        - name: UKP_LOG_LEVEL
+          value: "info"
+        - name: SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: ukp-secrets
+              key: secret-key
+        - name: OPENAI_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: ukp-secrets
+              key: openai-api-key
+        - name: ANTHROPIC_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: ukp-secrets
+              key: anthropic-api-key
+        - name: PINECONE_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: ukp-secrets
+              key: pinecone-api-key
+        - name: REDIS_URL
+          value: "redis://ukp-redis:6379"
+        - name: QDRANT_URL
+          value: "http://ukp-qdrant:6333"
+        - name: ELASTICSEARCH_URL
+          value: "http://ukp-elasticsearch:9200"
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8002
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8002
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        volumeMounts:
+        - name: logs
+          mountPath: /app/logs
+        - name: data
+          mountPath: /app/data
+      volumes:
+      - name: logs
+        emptyDir: {}
+      - name: data
+        persistentVolumeClaim:
+          claimName: ukp-data-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ukp-api-service
+  namespace: ukp
+spec:
+  selector:
+    app: ukp-api
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 8002
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ukp-redis
+  namespace: ukp
+spec:
+  selector:
+    app: ukp-redis
+  ports:
+  - protocol: TCP
+    port: 6379
+    targetPort: 6379
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ukp-redis
+  namespace: ukp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ukp-redis
+  template:
+    metadata:
+      labels:
+        app: ukp-redis
+    spec:
+      containers:
+      - name: redis
+        image: redis:7-alpine
+        ports:
+        - containerPort: 6379
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+        volumeMounts:
+        - name: redis-data
+          mountPath: /data
+      volumes:
+      - name: redis-data
+        persistentVolumeClaim:
+          claimName: ukp-redis-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ukp-qdrant
+  namespace: ukp
+spec:
+  selector:
+    app: ukp-qdrant
+  ports:
+  - protocol: TCP
+    port: 6333
+    targetPort: 6333
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ukp-qdrant
+  namespace: ukp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ukp-qdrant
+  template:
+    metadata:
+      labels:
+        app: ukp-qdrant
+    spec:
+      containers:
+      - name: qdrant
+        image: qdrant/qdrant:latest
+        ports:
+        - containerPort: 6333
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        volumeMounts:
+        - name: qdrant-data
+          mountPath: /qdrant/storage
+      volumes:
+      - name: qdrant-data
+        persistentVolumeClaim:
+          claimName: ukp-qdrant-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ukp-elasticsearch
+  namespace: ukp
+spec:
+  selector:
+    app: ukp-elasticsearch
+  ports:
+  - protocol: TCP
+    port: 9200
+    targetPort: 9200
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ukp-elasticsearch
+  namespace: ukp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ukp-elasticsearch
+  template:
+    metadata:
+      labels:
+        app: ukp-elasticsearch
+    spec:
+      containers:
+      - name: elasticsearch
+        image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+        env:
+        - name: discovery.type
+          value: single-node
+        - name: xpack.security.enabled
+          value: "false"
+        - name: ES_JAVA_OPTS
+          value: "-Xms512m -Xmx512m"
+        ports:
+        - containerPort: 9200
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+        volumeMounts:
+        - name: elasticsearch-data
+          mountPath: /usr/share/elasticsearch/data
+      volumes:
+      - name: elasticsearch-data
+        persistentVolumeClaim:
+          claimName: ukp-elasticsearch-pvc
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ukp-data-pvc
+  namespace: ukp
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ukp-redis-pvc
+  namespace: ukp
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ukp-qdrant-pvc
+  namespace: ukp
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ukp-elasticsearch-pvc
+  namespace: ukp
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 50Gi 
