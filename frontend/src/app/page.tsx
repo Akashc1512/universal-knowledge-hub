@@ -1,192 +1,154 @@
-'use client';
+'use client'
 
-import { useState } from 'react';
-import { QueryResponse } from '@/types/api';
-import api from '@/lib/api';
-import QueryForm from '@/components/QueryForm';
-import AnswerDisplay from '@/components/AnswerDisplay';
-import FeedbackForm from '@/components/FeedbackForm';
+import { useState } from 'react'
+import QueryForm from '@/components/QueryForm'
+import AnswerDisplay from '@/components/AnswerDisplay'
+import FeedbackForm from '@/components/FeedbackForm'
+import { QueryResponse } from '@/types/api'
 
-export default function HomePage() {
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<QueryResponse | null>(null);
+export default function Home() {
+  const [response, setResponse] = useState<QueryResponse | null>(null)
+  const [isLoading, setIsLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
-  const handleSubmitQuery = async (query: string) => {
-    setIsLoading(true);
-    setError(null);
-    setResult(null);
+  const handleQuerySubmit = async (query: string) => {
+    setIsLoading(true)
+    setError(null)
+    setResponse(null)
 
     try {
-      const response = await api.submitQuery(query);
-      setResult(response);
-    } catch (err: any) {
-      setError(err.message || 'An error occurred while processing your question.');
+      const response = await fetch('/api/query', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          query,
+          max_tokens: 1000,
+          confidence_threshold: 0.8,
+        }),
+      })
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`)
+      }
+
+      const data = await response.json()
+      setResponse(data)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'An error occurred')
     } finally {
-      setIsLoading(false);
+      setIsLoading(false)
     }
-  };
+  }
 
   const handleFeedback = async (type: 'helpful' | 'not-helpful', details?: string) => {
-    if (result?.query_id) {
-      try {
-        await api.submitFeedback({
-          query_id: result.query_id,
-          feedback_type: type,
-          details
-        });
-      } catch (error) {
-        console.error('Failed to submit feedback:', error);
-      }
-    }
-  };
+    // TODO: Implement feedback submission to backend
+    console.log('Feedback submitted:', { type, details })
+  }
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Header */}
-      <header className="bg-white shadow-sm border-b border-gray-200">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center py-4">
-            <div className="flex items-center">
-              <h1 className="text-2xl font-bold text-gray-900">
-                Universal Knowledge Platform
-              </h1>
-            </div>
-            <nav className="flex items-center space-x-4">
-              <a
-                href="/about"
-                className="text-gray-600 hover:text-gray-900 transition-colors"
-              >
-                About
-              </a>
-              <a
-                href="/help"
-                className="text-gray-600 hover:text-gray-900 transition-colors"
-              >
-                Help
-              </a>
-            </nav>
+    <div className="max-w-4xl mx-auto">
+      {/* Hero Section */}
+      <div className="text-center mb-12">
+        <div className="mb-6">
+          <div className="inline-flex items-center justify-center w-20 h-20 bg-gradient-to-r from-blue-600 to-indigo-600 rounded-full mb-4">
+            <span className="text-white text-3xl">🧠</span>
           </div>
-        </div>
-      </header>
-
-      {/* Main Content */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <div className="text-center mb-8">
-          <h2 className="text-3xl font-bold text-gray-900 mb-4">
-            Ask Anything, Get Accurate Answers
-          </h2>
-          <p className="text-lg text-gray-600 max-w-2xl mx-auto">
-            Our advanced AI system uses multiple agents to provide comprehensive, 
-            well-cited answers to your questions. Get reliable information with 
-            confidence scores and source citations.
+          <h1 className="text-4xl font-bold text-gray-900 mb-4">
+            Welcome to <span className="text-blue-600">SarvanOM</span>
+          </h1>
+          <p className="text-xl text-gray-600 mb-6">
+            Your Own Knowledge Hub Powered by AI
+          </p>
+          <p className="text-gray-500 max-w-2xl mx-auto">
+            Get accurate, verifiable answers with source citations and confidence scores. 
+            Powered by advanced AI agents that search, verify, and synthesize information from multiple sources.
           </p>
         </div>
+      </div>
 
-        {/* Query Form */}
-        <div className="mb-8">
-          <QueryForm
-            onSubmit={handleSubmitQuery}
-            isLoading={isLoading}
-            placeholder="Ask any question..."
-            maxLength={10000}
-          />
-        </div>
-
-        {/* Answer Display */}
-        {result && (
-          <div className="mb-6">
-            <AnswerDisplay
-              answer={result.answer}
-              confidence={result.confidence}
-              citations={result.citations}
-              isLoading={false}
-              queryId={result.query_id}
-            />
-          </div>
-        )}
-
-        {/* Error Display */}
+      {/* Main Interface */}
+      <div className="space-y-8">
+        <QueryForm onSubmit={handleQuerySubmit} isLoading={isLoading} />
+        
         {error && (
-          <div className="mb-6">
-            <AnswerDisplay
-              answer=""
-              confidence={0}
-              citations={[]}
-              isLoading={false}
-              error={error}
-            />
+          <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+            <div className="flex">
+              <div className="flex-shrink-0">
+                <svg className="h-5 w-5 text-red-400" viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                </svg>
+              </div>
+              <div className="ml-3">
+                <h3 className="text-sm font-medium text-red-800">Error</h3>
+                <div className="mt-2 text-sm text-red-700">
+                  <p>{error}</p>
+                </div>
+              </div>
+            </div>
           </div>
         )}
 
-        {/* Feedback Form */}
-        {result && !isLoading && (
-          <div className="mb-8">
-            <FeedbackForm
-              queryId={result.query_id || 'unknown'}
+        {response && (
+          <>
+            <AnswerDisplay 
+              answer={response.answer}
+              confidence={response.confidence}
+              citations={response.citations}
+              isLoading={false}
+              queryId={response.query_id}
+            />
+            <FeedbackForm 
+              queryId={response.query_id || 'unknown'}
               onFeedback={handleFeedback}
               disabled={isLoading}
             />
-          </div>
+          </>
         )}
+      </div>
 
-        {/* Features Section */}
-        <div className="mt-16 grid grid-cols-1 md:grid-cols-3 gap-8">
+      {/* Features Section */}
+      <div className="mt-16 bg-white rounded-lg shadow-sm border border-gray-200 p-8">
+        <h2 className="text-2xl font-bold text-gray-900 mb-6 text-center">
+          Why Choose SarvanOM?
+        </h2>
+        <div className="grid md:grid-cols-3 gap-8">
           <div className="text-center">
-            <div className="bg-blue-100 rounded-full p-3 w-16 h-16 mx-auto mb-4 flex items-center justify-center">
-              <svg className="h-8 w-8 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <div className="w-12 h-12 bg-blue-100 rounded-lg flex items-center justify-center mx-auto mb-4">
+              <svg className="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
               </svg>
             </div>
-            <h3 className="text-lg font-semibold text-gray-900 mb-2">
-              Multi-Agent Intelligence
-            </h3>
+            <h3 className="text-lg font-semibold text-gray-900 mb-2">AI-Powered Intelligence</h3>
             <p className="text-gray-600">
-              Our system uses specialized AI agents for retrieval, fact-checking, 
-              synthesis, and citation to ensure accurate answers.
+              Advanced multi-agent AI system that searches, verifies, and synthesizes information from multiple sources.
             </p>
           </div>
-
           <div className="text-center">
-            <div className="bg-green-100 rounded-full p-3 w-16 h-16 mx-auto mb-4 flex items-center justify-center">
-              <svg className="h-8 w-8 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <div className="w-12 h-12 bg-green-100 rounded-lg flex items-center justify-center mx-auto mb-4">
+              <svg className="w-6 h-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
             </div>
-            <h3 className="text-lg font-semibold text-gray-900 mb-2">
-              Verified Sources
-            </h3>
+            <h3 className="text-lg font-semibold text-gray-900 mb-2">Verified Sources</h3>
             <p className="text-gray-600">
-              Every answer includes citations from reliable sources, 
-              giving you confidence in the information provided.
+              Every answer includes source citations and confidence scores for complete transparency and trust.
             </p>
           </div>
-
           <div className="text-center">
-            <div className="bg-purple-100 rounded-full p-3 w-16 h-16 mx-auto mb-4 flex items-center justify-center">
-              <svg className="h-8 w-8 text-purple-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <div className="w-12 h-12 bg-purple-100 rounded-lg flex items-center justify-center mx-auto mb-4">
+              <svg className="w-6 h-6 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
               </svg>
             </div>
-            <h3 className="text-lg font-semibold text-gray-900 mb-2">
-              Fast & Reliable
-            </h3>
+            <h3 className="text-lg font-semibold text-gray-900 mb-2">Lightning Fast</h3>
             <p className="text-gray-600">
-              Get comprehensive answers quickly with confidence scores 
-              that help you understand the reliability of each response.
+              Optimized for speed with intelligent caching and parallel processing for quick, accurate responses.
             </p>
           </div>
         </div>
-      </main>
-
-      {/* Footer */}
-      <footer className="bg-white border-t border-gray-200 mt-16">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-          <div className="text-center text-gray-600">
-            <p>&copy; 2025 Universal Knowledge Platform. All rights reserved.</p>
-          </div>
-        </div>
-      </footer>
+      </div>
     </div>
-  );
+  )
 }
