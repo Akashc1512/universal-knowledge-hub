@@ -962,7 +962,7 @@ Source: {doc.source}
         """
         try:
             if not documents:
-                return documents
+        return documents
 
             # Format documents for LLM
             doc_texts = []
@@ -1217,7 +1217,7 @@ Source: {doc.source}
                 
         except Exception as e:
             logger.error(f"Result fusion failed: {e}")
-            return []
+        return []
 
     async def process_task(self, task: Dict[str, Any], context: QueryContext) -> AgentResult:
         """Process a retrieval task with token optimization."""
