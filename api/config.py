@@ -39,10 +39,11 @@ from enum import Enum
 import warnings
 
 from pydantic import (
-    BaseSettings, Field, validator, root_validator,
+    Field, validator, root_validator,
     SecretStr, HttpUrl, PostgresDsn, RedisDsn,
     EmailStr, IPvAnyAddress, conint, confloat
 )
+from pydantic_settings import BaseSettings
 from pydantic.types import constr
 import structlog
 

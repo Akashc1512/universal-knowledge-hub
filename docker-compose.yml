@@ -1,170 +1,131 @@
 version: '3.8'
 
 services:
-  sarvanom-backend:
-    build: 
-      context: .
-      dockerfile: Dockerfile
-    container_name: sarvanom-backend
-    ports:
-      - "8002:8002"
-    environment:
-      - UKP_HOST=0.0.0.0
-      - UKP_PORT=8002
-      - UKP_WORKERS=4
-      - UKP_LOG_LEVEL=info
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
-      - VECTOR_DB_URL=${VECTOR_DB_URL}
-      - ELASTICSEARCH_URL=${ELASTICSEARCH_URL}
-      - REDIS_URL=${REDIS_URL}
-      - API_KEY_SECRET=${API_KEY_SECRET}
-      - RATE_LIMIT_PER_MINUTE=60
-      - THREAT_DETECTION_ENABLED=true
-      - SECURITY_SCANNING_ENABLED=true
-      - ANOMALY_DETECTION_ENABLED=true
-    volumes:
-      - ./logs:/app/logs
-      - ./data:/app/data
-      - ./cache:/app/cache
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 60s
-    networks:
-      - sarvanom-network
-    depends_on:
-      - redis
-      - elasticsearch
-      - qdrant
-
-  # Vector Database (Qdrant)
-  qdrant:
-    image: qdrant/qdrant:latest
-    container_name: sarvanom-qdrant
-    ports:
-      - "6333:6333"
-      - "6334:6334"
-    volumes:
-      - qdrant_data:/qdrant/storage
-    environment:
-      - QDRANT__SERVICE__HTTP_PORT=6333
-      - QDRANT__SERVICE__GRPC_PORT=6334
-    restart: unless-stopped
-    networks:
-      - sarvanom-network
-
-  # Elasticsearch for search
-  elasticsearch:
-    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
-    container_name: sarvanom-elasticsearch
-    ports:
-      - "9200:9200"
-    environment:
-      - discovery.type=single-node
-      - xpack.security.enabled=false
-      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
-    volumes:
-      - elasticsearch_data:/usr/share/elasticsearch/data
-    restart: unless-stopped
-    networks:
-      - sarvanom-network
-
-  # Redis for caching
+  # Redis Cache
   redis:
-    image: redis:7-alpine
-    container_name: sarvanom-redis
+    image: redis/redis-stack-server:latest
+    container_name: ukp-redis
     ports:
       - "6379:6379"
     volumes:
       - redis_data:/data
     restart: unless-stopped
-    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-}
-    networks:
-      - sarvanom-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
-  # Prometheus for monitoring
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15
+    container_name: ukp-postgres
+    environment:
+      POSTGRES_PASSWORD: ukp_secure_password_2024
+      POSTGRES_DB: ukp_db
+      POSTGRES_USER: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Elasticsearch
+  elasticsearch:
+    image: elasticsearch:8.11.0
+    container_name: ukp-elasticsearch
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    ports:
+      - "9200:9200"
+    volumes:
+      - es_data:/usr/share/elasticsearch/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # Neo4j Graph Database
+  neo4j:
+    image: neo4j:latest
+    container_name: ukp-neo4j
+    environment:
+      NEO4J_AUTH: neo4j/ukp_neo4j_password_2024
+      NEO4J_PLUGINS: '["apoc", "graph-data-science"]'
+    ports:
+      - "7474:7474"  # HTTP
+      - "7687:7687"  # Bolt
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:7474 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # Qdrant Vector Database (Optional)
+  qdrant:
+    image: qdrant/qdrant
+    container_name: ukp-qdrant
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:6333/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # Prometheus (Monitoring)
   prometheus:
     image: prom/prometheus:latest
-    container_name: sarvanom-prometheus
+    container_name: ukp-prometheus
     ports:
       - "9090:9090"
     volumes:
-      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
       - prometheus_data:/prometheus
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'
-      - '--web.console.libraries=/etc/prometheus/console_libraries'
-      - '--web.console.templates=/etc/prometheus/consoles'
-      - '--storage.tsdb.retention.time=200h'
-      - '--web.enable-lifecycle'
     restart: unless-stopped
-    networks:
-      - sarvanom-network
 
-  # Grafana for dashboards
+  # Grafana (Dashboards)
   grafana:
     image: grafana/grafana:latest
-    container_name: sarvanom-grafana
+    container_name: ukp-grafana
     ports:
-      - "3001:3000"
+      - "3000:3000"
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=admin
-      - GF_INSTALL_PLUGINS=grafana-clock-panel,grafana-simple-json-datasource
+      - GF_USERS_ALLOW_SIGN_UP=false
     volumes:
       - grafana_data:/var/lib/grafana
-      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards
-      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources
     restart: unless-stopped
-    depends_on:
-      - prometheus
-    networks:
-      - sarvanom-network
-
-  # Kong API Gateway
-  kong:
-    image: kong:3.4
-    container_name: sarvanom-kong
-    ports:
-      - "8000:8000"
-      - "8443:8443"
-      - "8001:8001"
-      - "8444:8444"
-    environment:
-      - KONG_DATABASE=off
-      - KONG_PROXY_ACCESS_LOG=/dev/stdout
-      - KONG_ADMIN_ACCESS_LOG=/dev/stdout
-      - KONG_PROXY_ERROR_LOG=/dev/stderr
-      - KONG_ADMIN_ERROR_LOG=/dev/stderr
-      - KONG_ADMIN_LISTEN=0.0.0.0:8001
-      - KONG_PROXY_LISTEN=0.0.0.0:8000
-    volumes:
-      - ./monitoring/kong.yml:/etc/kong/kong.yml
-    restart: unless-stopped
-    networks:
-      - sarvanom-network
-    depends_on:
-      - sarvanom-backend
 
 volumes:
   redis_data:
-    driver: local
-  prometheus_data:
-    driver: local
-  grafana_data:
-    driver: local
-  elasticsearch_data:
-    driver: local
+  postgres_data:
+  es_data:
+  neo4j_data:
+  neo4j_logs:
   qdrant_data:
-    driver: local
+  prometheus_data:
+  grafana_data:
 
 networks:
-  sarvanom-network:
-    driver: bridge
-    ipam:
-      config:
-        - subnet: 172.20.0.0/16 
+  default:
+    name: ukp-network 

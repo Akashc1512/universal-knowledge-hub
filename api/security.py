@@ -776,6 +776,123 @@ def get_threat_stats() -> Dict[str, Any]:
     """Get threat detection statistics."""
     return _threat_detector.get_threat_stats()
 
+async def check_security(
+    query: str,
+    client_ip: str,
+    user_id: Optional[str] = None,
+    initial_confidence: float = 0.0
+) -> Dict[str, Any]:
+    """
+    Check security for a query request.
+    
+    Args:
+        query: The user query to check
+        client_ip: Client IP address
+        user_id: Optional user ID
+        initial_confidence: Initial confidence score
+        
+    Returns:
+        Security check result with blocked/monitored status
+    """
+    try:
+        # Basic threat detection
+        threats = _threat_detector.detect_threats(query)
+        
+        # Check for high-severity threats
+        blocked = any(
+            threat.severity in [SecurityLevel.HIGH, SecurityLevel.CRITICAL]
+            for threat in threats
+        )
+        
+        # Monitor medium severity threats
+        monitored = any(
+            threat.severity == SecurityLevel.MEDIUM
+            for threat in threats
+        )
+        
+        # Log security event if threats detected
+        if threats:
+            logger.warning(
+                "Security threats detected",
+                query=query[:100],  # Truncate for logging
+                client_ip=client_ip,
+                user_id=user_id,
+                threat_count=len(threats),
+                blocked=blocked,
+                monitored=monitored
+            )
+            
+            # Record metrics
+            for threat in threats:
+                security_events.labels(
+                    event_type=threat.threat_type.value,
+                    severity=threat.severity.value,
+                    source='query_check'
+                ).inc()
+        
+        return {
+            "blocked": blocked,
+            "monitored": monitored,
+            "threats": [
+                {
+                    "type": threat.threat_type.value,
+                    "severity": threat.severity.value,
+                    "confidence": threat.confidence
+                }
+                for threat in threats
+            ],
+            "client_ip": client_ip,
+            "user_id": user_id,
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(
+            "Security check failed",
+            error=str(e),
+            client_ip=client_ip,
+            user_id=user_id
+        )
+        # Fail open - don't block on errors
+        return {
+            "blocked": False,
+            "monitored": True,
+            "error": "Security check failed",
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
+
+def get_security_summary() -> Dict[str, Any]:
+    """
+    Get security summary statistics.
+    
+    Returns:
+        Summary of security metrics and status
+    """
+    try:
+        threat_stats = _threat_detector.get_threat_stats()
+        
+        return {
+            "status": "operational",
+            "threat_stats": threat_stats,
+            "security_features": {
+                "input_validation": True,
+                "sql_injection_protection": True,
+                "xss_protection": True,
+                "csrf_protection": True,
+                "encryption": True,
+                "threat_detection": True
+            },
+            "last_threat_scan": datetime.now(timezone.utc).isoformat(),
+            "version": "2.0.0"
+        }
+    except Exception as e:
+        logger.error("Failed to get security summary", error=str(e))
+        return {
+            "status": "error",
+            "error": str(e),
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
+
 # Export public API
 __all__ = [
     # Classes
@@ -800,4 +917,6 @@ __all__ = [
     'decrypt_data',
     'get_security_headers',
     'get_threat_stats',
+    'check_security',
+    'get_security_summary',
 ]

@@ -1,0 +1,28 @@
+{
+  "services": {
+    "redis": {
+      "enabled": true,
+      "url": "redis://clustercfg.ukp-redis.adjkvz.use1.cache.amazonaws.com:6379"
+    },
+    "elasticsearch": {
+      "enabled": true,
+      "url": "\u201dhttps://my-elasticsearch-project-acc841.es.us-east-1.aws.elastic.cloud:443\u201d"
+    },
+    "pinecone": {
+      "enabled": true
+    },
+    "qdrant": {
+      "enabled": true,
+      "url": "http://localhost:6333"
+    },
+    "neo4j": {
+      "enabled": true,
+      "uri": "neo4j+s://a0cd8cf2.databases.neo4j.io"
+    }
+  },
+  "features": {
+    "caching": true,
+    "vector_search": true,
+    "knowledge_graph": true
+  }
+}

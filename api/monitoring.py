@@ -31,6 +31,7 @@ import time
 import asyncio
 import functools
 import threading
+import sys
 from typing import (
     Optional, Dict, Any, List, Callable, Union, 
     TypeVar, Awaitable, Protocol, Type
@@ -49,7 +50,11 @@ from prometheus_client import (
 )
 from opentelemetry import trace, metrics
 from opentelemetry.trace import Status, StatusCode
-from opentelemetry.instrumentation.logging import LoggingInstrumentor
+try:
+    from opentelemetry.instrumentation.logging import LoggingInstrumentor
+    LoggingInstrumentor().instrument()
+except ImportError:
+    logger.warning("OpenTelemetry logging instrumentation not available")
 
 logger = structlog.get_logger(__name__)
 

@@ -206,13 +206,19 @@ async def get_current_user(
     """Get current authenticated user."""
     
     # Import here to avoid circular import
-    from api.user_management import get_user_manager
+    try:
+        from api.user_management_v2 import get_user_manager
+    except ImportError:
+        # Fallback to legacy user management
+        from api.user_management import get_user_manager
 
     # Check for API key in headers
     api_key = request.headers.get("X-API-Key")
     if api_key:
+        print(f"DEBUG: Found API key: {api_key}")  # Debug line
         user = APIKeyAuth.create_user_from_api_key(api_key)
         if user:
+            print(f"DEBUG: User created: {user.user_id}, role: {user.role}")  # Debug line
             # Check rate limit for API key user
             limit = API_KEYS.get(api_key, {}).get("rate_limit", 100)
             if not rate_limiter.check_rate_limit(user.user_id, limit):
@@ -222,6 +228,8 @@ async def get_current_user(
                 )
             user.update_activity()
             return user
+        else:
+            print(f"DEBUG: Failed to create user from API key: {api_key}")  # Debug line
 
     # Check for Bearer token
     if credentials:

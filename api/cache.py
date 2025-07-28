@@ -750,7 +750,7 @@ class CacheManager:
             try:
                 if await backend.set(key, value, ttl):
                     success = True
-        except Exception as e:
+            except Exception as e:
                 logger.error(f"Backend {i} set error", error=str(e))
                 self._mark_backend_unhealthy(i)
         
@@ -770,7 +770,7 @@ class CacheManager:
             try:
                 if await backend.delete(key):
                     success = True
-        except Exception as e:
+            except Exception as e:
                 logger.error(f"Backend {i} delete error", error=str(e))
                 self._mark_backend_unhealthy(i)
         
@@ -855,7 +855,7 @@ def cache_response(
             # Build cache key
             if key_builder:
                 cache_key = key_builder(*args, **kwargs)
-    else:
+            else:
                 # Default key builder
                 key_parts = [func.__module__, func.__name__]
                 key_parts.extend(str(arg) for arg in args)
@@ -879,7 +879,7 @@ def cache_response(
             # Cache result
             await manager.set(cache_key, result, ttl)
             
-        return result
+            return result
 
         # Handle sync functions
         if not asyncio.iscoroutinefunction(func):
@@ -954,4 +954,25 @@ __all__ = [
     # Functions
     'get_cache_manager',
     'invalidate_cache',
+    'initialize_caches',
 ]
+
+# Create global cache instance for backward compatibility
+_query_cache = None
+
+def _initialize_query_cache():
+    """Initialize the global query cache instance."""
+    global _query_cache
+    if _query_cache is None:
+        _query_cache = CacheManager()
+    return _query_cache
+
+# Initialize on import
+_query_cache = _initialize_query_cache()
+
+async def initialize_caches():
+    """Initialize all cache backends."""
+    global _query_cache
+    if _query_cache:
+        await _query_cache.initialize()
+    logger.info("Cache backends initialized")

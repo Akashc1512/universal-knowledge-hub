@@ -5,6 +5,7 @@ API Package
 FastAPI-based REST API for the Universal Knowledge Platform.
 """
 
-from .main import app
+# Removed import to avoid circular dependency
+# The app should be imported directly from api.main
 
-__all__ = ["app"]
+__all__ = []

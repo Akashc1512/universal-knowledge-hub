@@ -24,6 +24,17 @@ from agents.retrieval_agent import RetrievalAgent
 from agents.factcheck_agent import FactCheckAgent
 from agents.synthesis_agent import SynthesisAgent
 from agents.citation_agent import CitationAgent
+from agents.lead_orchestrator_fixes import (
+    create_safe_agent_result,
+    safe_prepare_synthesis_input,
+    handle_agent_failure,
+    validate_agent_result,
+    create_pipeline_error_response
+)
+from agents.orchestrator_workflow_fixes import (
+    merge_retrieval_results_improved,
+    execute_pipeline_improved
+)
 # Data models imported as needed
 
 # Configure logging
@@ -193,8 +204,8 @@ class LeadOrchestrator:
             results[AgentType.RETRIEVAL] = retrieval_result
         except Exception as e:
             logger.error(f"Retrieval failed: {e}")
-            results[AgentType.RETRIEVAL] = AgentResult(
-                success=False, error=f"Retrieval failed: {e}", data={"documents": []}
+            results[AgentType.RETRIEVAL] = handle_agent_failure(
+                AgentType.RETRIEVAL, e, context, results
             )
 
         # Phase 2: Fact checking and synthesis preparation
@@ -221,42 +232,52 @@ class LeadOrchestrator:
             for i, (agent_type, _) in enumerate(phase2_tasks):
                 if isinstance(phase2_results[i], Exception):
                     logger.error(f"Phase 2 task failed: {phase2_results[i]}")
-                    if agent_type == AgentType.FACT_CHECK:
-                        # Continue without fact checking
-                        results[agent_type] = AgentResult(
-                            success=False,
-                            error=f"Fact checking failed: {phase2_results[i]}",
-                            data={"verified_facts": []},
-                        )
+                    results[agent_type] = handle_agent_failure(
+                        agent_type, phase2_results[i], context, results
+                    )
                 else:
-                    results[agent_type] = phase2_results[i]
+                    results[agent_type] = validate_agent_result(
+                        phase2_results[i], agent_type
+                    )
 
         # Phase 3: Synthesis and citation (sequential due to dependencies)
         logger.info("Phase 3: Synthesis and citation")
 
         # Synthesis
-        synthesis_input = self._prepare_synthesis_input(results, context)
-        synthesis_result = await self.agents[AgentType.SYNTHESIS].process_task(
-            synthesis_input, context
-        )
+        synthesis_input = safe_prepare_synthesis_input(results, context)
+        try:
+            synthesis_result = await self.agents[AgentType.SYNTHESIS].process_task(
+                synthesis_input, context
+            )
+            synthesis_result = validate_agent_result(synthesis_result, AgentType.SYNTHESIS)
+        except Exception as e:
+            synthesis_result = handle_agent_failure(
+                AgentType.SYNTHESIS, e, context, results
+            )
         results[AgentType.SYNTHESIS] = synthesis_result
 
         if not synthesis_result.success:
             logger.error(f"Synthesis failed: {synthesis_result.error}")
-            return results
+            # Don't return early - continue with what we have
 
         # Citation (depends on synthesis)
-        citation_result = await self.agents[AgentType.CITATION].process_task(
-            {
+        try:
+            citation_input = {
                 "content": synthesis_result.data.get(
                     "response", synthesis_result.data.get("answer", "")
                 ),
                 "sources": results.get(
-                    AgentType.RETRIEVAL, AgentResult(success=False, data={"documents": []})
+                    AgentType.RETRIEVAL, create_safe_agent_result()
                 ).data.get("documents", []),
-            },
-            context,
-        )
+            }
+            citation_result = await self.agents[AgentType.CITATION].process_task(
+                citation_input, context
+            )
+            citation_result = validate_agent_result(citation_result, AgentType.CITATION)
+        except Exception as e:
+            citation_result = handle_agent_failure(
+                AgentType.CITATION, e, context, results
+            )
         results[AgentType.CITATION] = citation_result
 
         return results
@@ -350,15 +371,23 @@ class LeadOrchestrator:
         logger.info("Executing parallel retrieval tasks (vector, keyword, graph)")
         retrieval_results = await asyncio.gather(*retrieval_tasks, return_exceptions=True)
 
-        # Handle exceptions in retrieval results
+        # Handle exceptions and collect valid results
         valid_results = []
-        for result in retrieval_results:
+        for i, result in enumerate(retrieval_results):
             if isinstance(result, Exception):
                 logger.error(f"Retrieval task failed: {result}")
-            elif hasattr(result, "data") and result.data.get("documents"):
-                valid_results.extend(result.data["documents"])
+                # Create a failed result
+                valid_results.append(AgentResult(
+                    success=False,
+                    error=str(result),
+                    data={"documents": []}
+                ))
+            else:
+                valid_results.append(result)
 
-        if not valid_results:
+        # Check if we have any successful results
+        successful_results = [r for r in valid_results if r.success]
+        if not successful_results:
             logger.error("All retrieval tasks failed")
             return {
                 AgentType.RETRIEVAL: AgentResult(
@@ -366,19 +395,10 @@ class LeadOrchestrator:
                 )
             }
 
-        # Merge retrieval results (deduplicate by content)
-        seen_contents = set()
-        unique_documents = []
-        for doc in valid_results:
-            content_hash = hash(doc.get("content", ""))
-            if content_hash not in seen_contents:
-                seen_contents.add(content_hash)
-                unique_documents.append(doc)
-        final_documents = unique_documents[:20]
-        merged_retrieval = AgentResult(
-            success=True,
-            data={"documents": final_documents},
-            confidence=min(0.9, len(final_documents) / 20.0),
+        # Use improved merge function with retrieval agent's merge capabilities
+        merged_retrieval = merge_retrieval_results_improved(
+            valid_results,
+            retrieval_agent=self.agents.get(AgentType.RETRIEVAL)
         )
 
         # Continue with synthesis and citation
@@ -445,17 +465,23 @@ class LeadOrchestrator:
         # Execute domain searches
         domain_results = await asyncio.gather(*domain_tasks, return_exceptions=True)
 
-        # Combine domain results
-        all_documents = []
+        # Convert results to AgentResults for merging
+        valid_results = []
         for result in domain_results:
             if isinstance(result, Exception):
                 logger.error(f"Domain search failed: {result}")
-            elif result.success:
-                all_documents.extend(result.data.get("documents", []))
+                valid_results.append(AgentResult(
+                    success=False,
+                    error=str(result),
+                    data={"documents": []}
+                ))
+            else:
+                valid_results.append(result)
 
-        # Create merged retrieval result
-        merged_retrieval = self._merge_retrieval_results(
-            [AgentResult(success=True, data={"documents": all_documents})]
+        # Use improved merge function
+        merged_retrieval = merge_retrieval_results_improved(
+            valid_results,
+            retrieval_agent=self.agents.get(AgentType.RETRIEVAL)
         )
 
         # Continue with synthesis and citation
@@ -891,19 +917,24 @@ class ResponseAggregator:
         # Integrate citations if available
         citation_result = results.get(AgentType.CITATION)
         bibliography = []
+        citations = []
         cited_content = None
         if citation_result and citation_result.success:
             try:
                 citation_data = citation_result.data
-                cited_content = citation_data.cited_content
-                bibliography = citation_data.bibliography
+                # Handle both old and new field names
+                cited_content = citation_data.get("cited_content", "")
+                citations = citation_data.get("citations", [])
+                bibliography = citation_data.get("bibliography", citations)
                 # Use cited content if available, otherwise use original answer
                 if cited_content:
                     answer = cited_content
             except Exception as e:
-                logger.warning(f"Failed to convert citation data: {e}")
+                logger.warning(f"Failed to extract citation data: {e}")
+                # Fallback to direct dictionary access
                 cited_content = citation_result.data.get("cited_content", "")
-                bibliography = citation_result.data.get("bibliography", [])
+                citations = citation_result.data.get("citations", [])
+                bibliography = citation_result.data.get("bibliography", citations)
                 if cited_content:
                     answer = cited_content
 
@@ -918,7 +949,8 @@ class ResponseAggregator:
             "answer": answer,
             "cited_content": cited_content if cited_content else answer,
             "confidence": confidence,
-            "bibliography": bibliography,
+            "citations": citations,  # Include raw citations
+            "bibliography": bibliography,  # Formatted bibliography
             "metadata": {
                 "agent_results": {agent.value: result.success for agent, result in results.items()},
                 "token_usage": total_tokens,
@@ -931,19 +963,22 @@ class ResponseAggregator:
         self, results: Dict[AgentType, AgentResult], context: QueryContext
     ) -> Dict[str, Any]:
         """Create response when synthesis fails."""
-        return {
-            "success": False,
-            "answer": "Unable to generate a complete answer due to processing errors.",
-            "confidence": 0.0,
-            "citations": [],
-            "bibliography": [],
-            "metadata": {
-                "partial_results": True,
-                "agent_results": {agent.value: result.success for agent, result in results.items()},
-                "errors": [result.error for result in results.values() if result.error],
-                "trace_id": context.trace_id,
-            },
+        # Use the improved error response creator
+        error_response = create_pipeline_error_response(
+            context,
+            "Unable to generate a complete answer due to processing errors.",
+            results
+        )
+        
+        # Add trace ID and additional metadata
+        error_response["metadata"] = {
+            "partial_results": True,
+            "agent_results": {agent.value: result.success for agent, result in results.items()},
+            "errors": [result.error for result in results.values() if result.error],
+            "trace_id": context.trace_id,
         }
+        
+        return error_response
 
     def _calculate_weighted_confidence(self, results: Dict[AgentType, AgentResult]) -> float:
         """

@@ -1216,6 +1216,16 @@ def get_user_service() -> UserService:
         cache=cache
     )
 
+# Backward compatibility function for integration layer
+def get_user_manager() -> UserService:
+    """
+    Get user manager instance for backward compatibility.
+    
+    Returns:
+        UserService instance
+    """
+    return get_user_service()
+
 # Export public API
 __all__ = [
     # Exceptions
@@ -1240,6 +1250,7 @@ __all__ = [
     # Service
     'UserService',
     'get_user_service',
+    'get_user_manager',
     
     # Repository
     'UserRepositoryProtocol',

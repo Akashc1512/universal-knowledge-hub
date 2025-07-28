@@ -2,7 +2,7 @@
 
 import React from 'react';
 import { Citation } from '@/types/api';
-import { ArrowUpRightIcon } from '@heroicons/react/24/outline';
+import { ArrowTopRightOnSquareIcon } from '@heroicons/react/24/outline';
 
 interface CitationListProps {
   citations: Citation[];
@@ -39,7 +39,7 @@ export default function CitationList({ citations }: CitationListProps) {
                     className="ml-2 flex-shrink-0 text-blue-600 hover:text-blue-800 transition-colors"
                     title="Visit source"
                   >
-                    <ArrowUpRightIcon className="h-4 w-4" />
+                    <ArrowTopRightOnSquareIcon className="h-4 w-4" />
                     <span className="sr-only">Visit source</span>
                   </a>
                 )}

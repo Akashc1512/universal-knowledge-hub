@@ -1,0 +1,25 @@
+# Testing dependencies
+# Core testing framework
+pytest==8.4.1
+pytest-asyncio==0.23.5
+pytest-cov==6.2.1
+pytest-mock==3.12.0
+pytest-timeout==2.2.0
+pytest-xdist==3.5.0
+
+# Coverage
+coverage==7.10.0
+coverage-badge==1.1.0
+
+# Testing utilities
+httpx==0.28.1  # For testing HTTP clients
+faker==22.5.1  # For generating test data
+factory-boy==3.3.0  # For test factories
+freezegun==1.4.0  # For mocking time
+
+# Load testing
+locust==2.17.0
+
+# Mocking
+responses==0.24.1
+aioresponses==0.7.6 

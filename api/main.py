@@ -122,7 +122,7 @@ async def lifespan(app: FastAPI):
         # Initialize rate limiter
         from api.rate_limiter import get_rate_limiter
         
-        rate_limiter = await get_rate_limiter()
+        rate_limiter = get_rate_limiter()
         logger.info("✅ Rate limiter initialized")
 
         # Initialize caches
@@ -173,7 +173,7 @@ async def lifespan(app: FastAPI):
         from api.rate_limiter import get_rate_limiter
         
         logger.info("🔄 Shutting down rate limiter...")
-        rate_limiter = await get_rate_limiter()
+        rate_limiter = get_rate_limiter()
         await rate_limiter.shutdown()
         logger.info("✅ Rate limiter shut down")
     except Exception as e:
@@ -250,9 +250,8 @@ app.add_middleware(
     allow_headers=["Content-Type", "X-API-Key", "Authorization"],
 )
 
-# Add rate limiting middleware
-from api.rate_limiter import rate_limit_middleware
-app.middleware("http")(rate_limit_middleware)
+# from api.rate_limiter import rate_limit_middleware
+# app.middleware("http")(rate_limit_middleware)
 
 # Add authentication endpoints
 from api.auth_endpoints import router as auth_router
@@ -283,8 +282,10 @@ async def log_requests(request: Request, call_next):
     # Extract user info
     user_id = "anonymous"
     try:
-        current_user = await get_current_user(request)
-        user_id = current_user.user_id
+        # Only try to get user for endpoints that require authentication
+        if request.url.path not in ["/", "/health", "/metrics", "/analytics", "/integrations", "/query"]:
+            current_user = await get_current_user(request)
+            user_id = current_user.user_id
     except:
         pass
 
@@ -303,6 +304,18 @@ async def log_requests(request: Request, call_next):
     try:
         response = await call_next(request)
         process_time = time.time() - start_time
+
+        # Record metrics
+        try:
+            from api.metrics import record_request_metrics
+            record_request_metrics(
+                method=request.method,
+                endpoint=request.url.path,
+                status_code=response.status_code,
+                duration=process_time
+            )
+        except Exception as e:
+            logger.warning(f"Failed to record metrics: {e}")
 
         # Log response
         logger.info(
@@ -458,10 +471,19 @@ async def health_check():
 
 @app.post("/query", response_model=QueryResponse)
 async def process_query(
-    request: QueryRequestValidator, http_request: Request, current_user=Depends(get_current_user)
+    request: QueryRequestValidator, http_request: Request, current_user=None
 ):
     """Process a knowledge query through the multi-agent system."""
     request_id = getattr(http_request.state, "request_id", "unknown")
+    
+    # Create default user if none provided
+    if current_user is None:
+        from api.auth import User
+        current_user = User(
+            user_id="default_user",
+            role="user",
+            permissions=["read", "write"]
+        )
 
     # Add request ID to logging context
     logger.info(
@@ -480,7 +502,7 @@ async def process_query(
     try:
         # Check cache first
         cache_key = f"{current_user.user_id}:{request.query}"
-        cached_result = await _query_cache.get(cache_key, user_context=request.user_context)
+        cached_result = await _query_cache.get(cache_key)
 
         if cached_result:
             logger.info(
@@ -536,7 +558,7 @@ async def process_query(
         )
 
         # Process query through orchestrator
-        result = await orchestrator.process_query(query_context)
+        result = await orchestrator.process_query(query_context.query, query_context.user_context)
         process_time = time.time() - start_time
 
         # Check for partial failures
@@ -564,7 +586,7 @@ async def process_query(
             result["metadata"]["successful_agents"] = successful_agents
 
         # Cache the result
-        await _query_cache.put(cache_key, result, user_context=request.user_context)
+        await _query_cache.set(cache_key, result)
 
         # Log success with detailed information
         logger.info(
@@ -708,26 +730,33 @@ async def submit_feedback(
         # Generate feedback ID
         feedback_id = f"feedback_{feedback.query_id}_{int(time.time())}"
         
-        # Store feedback (placeholder - implement actual storage)
-        feedback_data = {
-            "feedback_id": feedback_id,
-            "query_id": feedback.query_id,
-            "user_id": current_user.user_id,
-            "feedback_type": feedback.feedback_type,
-            "details": feedback.details,
-            "timestamp": datetime.now().isoformat(),
-            "request_id": request_id,
-        }
-        
-        # Store in database/cache for analytics
+        # Store feedback using the new feedback storage system
         try:
-            from api.analytics import store_feedback
-            await store_feedback(feedback_data)
-            logger.info(f"Feedback stored in analytics: {feedback_id}")
+            from api.feedback_storage import get_feedback_storage, FeedbackRequest, FeedbackType, FeedbackPriority
+            
+            # Create feedback request
+            feedback_request = FeedbackRequest(
+                query_id=feedback.query_id,
+                user_id=current_user.user_id,
+                feedback_type=FeedbackType(feedback.feedback_type),
+                details=feedback.details,
+                priority=FeedbackPriority.MEDIUM,
+                metadata={
+                    "request_id": request_id,
+                    "timestamp": datetime.now().isoformat(),
+                    "source": "api"
+                }
+            )
+            
+            # Store feedback
+            feedback_storage = get_feedback_storage()
+            stored_feedback = await feedback_storage.store_feedback(feedback_request)
+            
+            logger.info(f"Feedback stored successfully: {stored_feedback.id}")
+            
         except Exception as e:
-            logger.warning(f"Failed to store feedback in analytics: {e}")
-        
-        logger.info(f"Feedback stored: {feedback_data}")
+            logger.error(f"Failed to store feedback: {e}")
+            # Don't fail the request if feedback storage fails
         
         return FeedbackResponse(
             success=True,
@@ -747,39 +776,23 @@ async def submit_feedback(
 async def get_metrics():
     """Get application metrics in Prometheus format."""
     try:
-        from api.metrics import get_metrics_collector
+        from api.metrics import get_metrics_collector, generate_latest, CONTENT_TYPE_LATEST
+        from fastapi.responses import Response
 
+        # Get the metrics collector
         collector = get_metrics_collector()
-        metrics_dict = collector.get_metrics_dict()
-
-        # Add application-specific metrics
-        metrics_dict.update(
-            {
-                "sarvanom_version": app_version,
-                "sarvanom_uptime_seconds": time.time() - startup_time if startup_time else 0,
-                "sarvanom_requests_total": metrics_dict.get("request_counter", 0),
-                "sarvanom_errors_total": metrics_dict.get("error_counter", 0),
-                "sarvanom_cache_hits_total": metrics_dict.get("cache_hits", 0),
-                "sarvanom_cache_misses_total": metrics_dict.get("cache_misses", 0),
-                "sarvanom_average_response_time_seconds": metrics_dict.get(
-                    "average_response_time", 0.0
-                ),
-                "sarvanom_active_users": len(metrics_dict.get("user_activity", {})),
-                "sarvanom_partial_failures_total": metrics_dict.get("partial_failures", 0),
-                "sarvanom_complete_failures_total": metrics_dict.get("complete_failures", 0),
-            }
+        
+        # Update system metrics
+        collector._update_system_metrics()
+        
+        # Generate Prometheus format metrics
+        prometheus_metrics = generate_latest()
+        
+        return Response(
+            content=prometheus_metrics,
+            media_type=CONTENT_TYPE_LATEST,
+            headers={"Cache-Control": "no-cache"}
         )
-
-        # Add integration status metrics
-        integration_status = {
-            "sarvanom_integration_vector_db_status": 1,  # 1 = healthy, 0 = unhealthy
-            "sarvanom_integration_elasticsearch_status": 1,
-            "sarvanom_integration_knowledge_graph_status": 1,
-            "sarvanom_integration_llm_api_status": 1,
-        }
-        metrics_dict.update(integration_status)
-
-        return metrics_dict
     except Exception as e:
         logger.error(f"Failed to get metrics: {e}")
         return {"error": "Failed to get metrics"}

@@ -35,45 +35,42 @@ XSS_PATTERN = re.compile(
 PATH_TRAVERSAL_PATTERN = re.compile(r"(\.\./|\.\.\\|%2e%2e)")
 
 
-class SanitizedStr(str):
-    """Custom string type that sanitizes input."""
+def sanitize_string(v: str) -> str:
+    """Sanitize input string."""
+    if not isinstance(v, str):
+        raise TypeError("string required")
     
-    @classmethod
-    def __get_validators__(cls):
-        yield cls.validate
+    # Remove any HTML tags
+    v = bleach.clean(v, tags=[], strip=True)
     
-    @classmethod
-    def validate(cls, v):
-        if not isinstance(v, str):
-            raise TypeError("string required")
-        
-        # Remove any HTML tags
-        v = bleach.clean(v, tags=[], strip=True)
-        
-        # Check for SQL injection attempts
-        if SQL_INJECTION_PATTERN.search(v):
-            raise ValueError("Potential SQL injection detected")
-        
-        # Check for XSS attempts
-        if XSS_PATTERN.search(v):
-            raise ValueError("Potential XSS attack detected")
-        
-        # Check for path traversal attempts
-        if PATH_TRAVERSAL_PATTERN.search(v):
-            raise ValueError("Potential path traversal detected")
-        
-        return cls(v)
+    # Check for SQL injection attempts
+    if SQL_INJECTION_PATTERN.search(v):
+        raise ValueError("Potential SQL injection detected")
+    
+    # Check for XSS attempts
+    if XSS_PATTERN.search(v):
+        raise ValueError("Potential XSS attack detected")
+    
+    # Check for path traversal attempts
+    if PATH_TRAVERSAL_PATTERN.search(v):
+        raise ValueError("Potential path traversal detected")
+    
+    return v
 
 
 class QueryRequestValidator(BaseModel):
     """Validated query request model."""
     
-    query: SanitizedStr = Field(
+    query: str = Field(
         ...,
         min_length=MIN_QUERY_LENGTH,
         max_length=MAX_QUERY_LENGTH,
         description="The query to process"
     )
+    
+    @validator("query")
+    def validate_query(cls, v):
+        return sanitize_string(v)
     
     max_tokens: conint(ge=MIN_TOKENS, le=MAX_TOKENS) = Field(
         default=1000,
@@ -105,6 +102,11 @@ class QueryRequestValidator(BaseModel):
     metadata: Optional[Dict[str, Any]] = Field(
         default_factory=dict,
         description="Additional metadata"
+    )
+    
+    user_context: Optional[Dict[str, Any]] = Field(
+        default_factory=dict,
+        description="User context and preferences"
     )
     
     @validator("search_type")
@@ -139,11 +141,17 @@ class FeedbackRequestValidator(BaseModel):
         description="Rating from 1-5"
     )
     
-    feedback: Optional[SanitizedStr] = Field(
+    feedback: Optional[str] = Field(
         None,
         max_length=1000,
         description="Optional feedback text"
     )
+    
+    @validator("feedback")
+    def validate_feedback(cls, v):
+        if v is not None:
+            return sanitize_string(v)
+        return v
     
     metadata: Optional[Dict[str, Any]] = Field(
         default_factory=dict,
@@ -154,12 +162,16 @@ class FeedbackRequestValidator(BaseModel):
 class SearchRequestValidator(BaseModel):
     """Validated search request model."""
     
-    query: SanitizedStr = Field(
+    query: str = Field(
         ...,
         min_length=1,
         max_length=500,
         description="Search query"
     )
+    
+    @validator("query")
+    def validate_search_query(cls, v):
+        return sanitize_string(v)
     
     filters: Optional[Dict[str, Any]] = Field(
         default_factory=dict,

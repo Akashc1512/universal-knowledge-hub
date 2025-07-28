@@ -1,174 +1,209 @@
-'use client'
+'use client';
 
-import { useState } from 'react'
-import Link from 'next/link'
-import QueryForm from '@/components/QueryForm'
-import AnswerDisplay from '@/components/AnswerDisplay'
-import FeedbackForm from '@/components/FeedbackForm'
-import { QueryResponse } from '@/types/api'
-import { api } from '@/lib/api'
+import { useState } from 'react';
+import { QueryResponse } from '@/types/api';
+import api from '@/lib/api';
+import QueryForm from '@/components/QueryForm';
+import AnswerDisplay from '@/components/AnswerDisplay';
+import FeedbackForm from '@/components/FeedbackForm';
+import ErrorDisplay from '@/components/ErrorDisplay';
 
-export default function Home() {
-  const [response, setResponse] = useState<QueryResponse | null>(null)
-  const [isLoading, setIsLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+export default function HomePage() {
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [errorRequestId, setErrorRequestId] = useState<string | null>(null);
+  const [result, setResult] = useState<QueryResponse | null>(null);
+  const [lastQuery, setLastQuery] = useState<string>('');
 
-  const handleQuery = async (query: string) => {
-    setIsLoading(true)
-    setError(null)
-    setResponse(null)
+  const handleSubmitQuery = async (query: string) => {
+    setIsLoading(true);
+    setError(null);
+    setErrorRequestId(null);
+    setResult(null);
+    setLastQuery(query);
 
     try {
-      const data = await api.submitQuery(query)
-      setResponse(data)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'An error occurred')
+      const response = await api.submitQuery(query);
+      setResult(response);
+    } catch (err: unknown) {
+      // Extract request ID from error if available
+      if (err && typeof err === 'object' && 'response' in err) {
+        const axiosError = err as { response?: { data?: { request_id?: string } }; message?: string };
+        const requestId = axiosError.response?.data?.request_id || null;
+        setErrorRequestId(requestId);
+        setError(axiosError.message || 'An error occurred while processing your question.');
+      } else {
+        setError('An error occurred while processing your question.');
+      }
     } finally {
-      setIsLoading(false)
+      setIsLoading(false);
     }
-  }
+  };
+
+  const handleRetry = () => {
+    if (lastQuery) {
+      handleSubmitQuery(lastQuery);
+    }
+  };
 
   const handleFeedback = async (type: 'helpful' | 'not-helpful', details?: string) => {
-    if (!response?.query_id) return
-
-    try {
-      await api.submitFeedback({
-        query_id: response.query_id,
-        feedback_type: type,
-        details: details || '',
-      })
-    } catch (err) {
-      console.error('Feedback submission failed:', err)
-      // Don't show error to user for feedback failures
+    if (result?.query_id) {
+      try {
+        await api.submitFeedback({
+          query_id: result.query_id,
+          feedback_type: type,
+          details
+        });
+      } catch (error) {
+        console.error('Failed to submit feedback:', error);
+      }
     }
-  }
+  };
 
   return (
-    <div className="max-w-4xl mx-auto">
-      {/* Navigation */}
-      <div className="mb-8">
-        <nav className="flex space-x-4">
-          <Link 
-            href="/" 
-            className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
-          >
-            New Query
-          </Link>
-          <Link 
-            href="/queries" 
-            className="px-4 py-2 border border-blue-600 text-blue-600 rounded-md hover:bg-blue-50"
-          >
-            Manage Queries
-          </Link>
-          <Link 
-            href="/dashboard" 
-            className="px-4 py-2 border border-blue-600 text-blue-600 rounded-md hover:bg-blue-50"
-          >
-            Dashboard
-          </Link>
-        </nav>
-      </div>
-
-      {/* Hero Section */}
-      <div className="text-center mb-12">
-        <div className="mb-6">
-          <div className="inline-flex items-center justify-center w-20 h-20 bg-gradient-to-r from-blue-600 to-indigo-600 rounded-full mb-4">
-            <span className="text-white text-3xl">🧠</span>
+    <div className="min-h-screen bg-gray-50">
+      {/* Header */}
+      <header className="bg-white shadow-sm border-b border-gray-200">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex justify-between items-center py-4">
+            <div className="flex items-center">
+              <h1 className="text-2xl font-bold text-gray-900">
+                Universal Knowledge Platform
+              </h1>
+            </div>
+            <nav className="flex items-center space-x-4">
+              <a
+                href="/about"
+                className="text-gray-600 hover:text-gray-900 transition-colors"
+              >
+                About
+              </a>
+              <a
+                href="/help"
+                className="text-gray-600 hover:text-gray-900 transition-colors"
+              >
+                Help
+              </a>
+            </nav>
           </div>
-          <h1 className="text-4xl font-bold text-gray-900 mb-4">
-            Welcome to <span className="text-blue-600">SarvanOM</span>
-          </h1>
-          <p className="text-xl text-gray-600 mb-6">
-            Your Own Knowledge Hub Powered by AI
-          </p>
-          <p className="text-gray-500 max-w-2xl mx-auto">
-            Get accurate, verifiable answers with source citations and confidence scores. 
-            Powered by advanced AI agents that search, verify, and synthesize information from multiple sources.
+        </div>
+      </header>
+
+      {/* Main Content */}
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <div className="text-center mb-8">
+          <h2 className="text-3xl font-bold text-gray-900 mb-4">
+            Ask Anything, Get Accurate Answers
+          </h2>
+          <p className="text-lg text-gray-600 max-w-2xl mx-auto">
+            Our advanced AI system uses multiple agents to provide comprehensive, 
+            well-cited answers to your questions. Get reliable information with 
+            confidence scores and source citations.
           </p>
         </div>
-      </div>
 
-      {/* Main Interface */}
-      <div className="space-y-8">
-        <QueryForm onSubmit={handleQuery} isLoading={isLoading} />
-        
-        {error && (
-          <div className="bg-red-50 border border-red-200 rounded-lg p-4">
-            <div className="flex">
-              <div className="flex-shrink-0">
-                <svg className="h-5 w-5 text-red-400" viewBox="0 0 20 20" fill="currentColor">
-                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
-                </svg>
-              </div>
-              <div className="ml-3">
-                <h3 className="text-sm font-medium text-red-800">Error</h3>
-                <div className="mt-2 text-sm text-red-700">
-                  <p>{error}</p>
-                </div>
-              </div>
-            </div>
+        {/* Query Form */}
+        <div className="mb-8">
+          <QueryForm
+            onSubmit={handleSubmitQuery}
+            isLoading={isLoading}
+            placeholder="Ask any question..."
+            maxLength={10000}
+          />
+        </div>
+
+        {/* Answer Display */}
+        {result && (
+          <div className="mb-6">
+            <AnswerDisplay
+              answer={result.answer}
+              confidence={result.confidence}
+              citations={result.citations}
+              isLoading={false}
+              queryId={result.query_id}
+            />
           </div>
         )}
 
-        {response && (
-          <>
-            <AnswerDisplay 
-              answer={response.answer}
-              confidence={response.confidence}
-              citations={response.citations}
-              isLoading={false}
-              queryId={response.query_id}
+        {/* Error Display */}
+        {error && !isLoading && (
+          <div className="mb-6">
+            <ErrorDisplay
+              error={error}
+              onRetry={handleRetry}
+              requestId={errorRequestId || undefined}
             />
-            <FeedbackForm 
-              queryId={response.query_id || 'unknown'}
+          </div>
+        )}
+
+        {/* Feedback Form */}
+        {result && !isLoading && (
+          <div className="mb-8">
+            <FeedbackForm
+              queryId={result.query_id || 'unknown'}
               onFeedback={handleFeedback}
               disabled={isLoading}
             />
-          </>
+          </div>
         )}
-      </div>
 
-      {/* Features Section */}
-      <div className="mt-16 bg-white rounded-lg shadow-sm border border-gray-200 p-8">
-        <h2 className="text-2xl font-bold text-gray-900 mb-6 text-center">
-          Why Choose SarvanOM?
-        </h2>
-        <div className="grid md:grid-cols-3 gap-8">
+        {/* Features Section */}
+        <div className="mt-16 grid grid-cols-1 md:grid-cols-3 gap-8">
           <div className="text-center">
-            <div className="w-12 h-12 bg-blue-100 rounded-lg flex items-center justify-center mx-auto mb-4">
-              <svg className="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <div className="bg-blue-100 rounded-full p-3 w-16 h-16 mx-auto mb-4 flex items-center justify-center">
+              <svg className="h-8 w-8 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
               </svg>
             </div>
-            <h3 className="text-lg font-semibold text-gray-900 mb-2">AI-Powered Intelligence</h3>
+            <h3 className="text-lg font-semibold text-gray-900 mb-2">
+              Multi-Agent Intelligence
+            </h3>
             <p className="text-gray-600">
-              Advanced multi-agent AI system that searches, verifies, and synthesizes information from multiple sources.
+              Our system uses specialized AI agents for retrieval, fact-checking, 
+              synthesis, and citation to ensure accurate answers.
             </p>
           </div>
+
           <div className="text-center">
-            <div className="w-12 h-12 bg-green-100 rounded-lg flex items-center justify-center mx-auto mb-4">
-              <svg className="w-6 h-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <div className="bg-green-100 rounded-full p-3 w-16 h-16 mx-auto mb-4 flex items-center justify-center">
+              <svg className="h-8 w-8 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
             </div>
-            <h3 className="text-lg font-semibold text-gray-900 mb-2">Verified Sources</h3>
+            <h3 className="text-lg font-semibold text-gray-900 mb-2">
+              Verified Sources
+            </h3>
             <p className="text-gray-600">
-              Every answer includes source citations and confidence scores for complete transparency and trust.
+              Every answer includes citations from reliable sources, 
+              giving you confidence in the information provided.
             </p>
           </div>
+
           <div className="text-center">
-            <div className="w-12 h-12 bg-purple-100 rounded-lg flex items-center justify-center mx-auto mb-4">
-              <svg className="w-6 h-6 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <div className="bg-purple-100 rounded-full p-3 w-16 h-16 mx-auto mb-4 flex items-center justify-center">
+              <svg className="h-8 w-8 text-purple-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
               </svg>
             </div>
-            <h3 className="text-lg font-semibold text-gray-900 mb-2">Lightning Fast</h3>
+            <h3 className="text-lg font-semibold text-gray-900 mb-2">
+              Fast & Reliable
+            </h3>
             <p className="text-gray-600">
-              Optimized for speed with intelligent caching and parallel processing for quick, accurate responses.
+              Get comprehensive answers quickly with confidence scores 
+              that help you understand the reliability of each response.
             </p>
           </div>
         </div>
-      </div>
+      </main>
+
+      {/* Footer */}
+      <footer className="bg-white border-t border-gray-200 mt-16">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+          <div className="text-center text-gray-600">
+            <p>&copy; 2025 Universal Knowledge Platform. All rights reserved.</p>
+          </div>
+        </div>
+      </footer>
     </div>
-  )
+  );
 }

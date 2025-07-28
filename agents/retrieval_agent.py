@@ -948,7 +948,6 @@ Source: {doc.source}
             )
         return "\n".join(formatted)
 
-    # TODO: Implement LLM integration methods
     async def _llm_rerank(self, prompt: str, documents: List[Document]) -> List[Document]:
         """
         Use LLM to rerank documents based on relevance to query.

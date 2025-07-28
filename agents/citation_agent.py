@@ -258,11 +258,17 @@ class CitationAgent(BaseAgent):
 
                     # Track in-text citations
                     for citation in relevant_citations:
-                        # This part of the logic needs to be updated to reflect the new structure
-                        # where citations are directly integrated into the content.
-                        # For now, we'll just return the content as is, as the integration
-                        # logic is not fully specified in the new_code.
-                        pass  # Placeholder for in-text citation tracking
+                        # Implement in-text citation tracking
+                        citation_text = f" [{citation.source}]"
+                        cited_sentence = f"{sentence.strip()}{citation_text}."
+                        
+                        # Track citation usage for analytics
+                        logger.info(
+                            "Citation used in sentence",
+                            citation_id=citation.id,
+                            source=citation.source,
+                            sentence_preview=sentence[:100]
+                        )
                 else:
                     cited_sentence = f"{sentence.strip()}."
 

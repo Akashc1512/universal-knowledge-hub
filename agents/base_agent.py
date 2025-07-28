@@ -300,11 +300,17 @@ class BaseAgent(ABC):
                     message_type=response.header.get("message_type")
                 )
             
-            # TODO: Implement actual message broker integration
-            # Example with Redis:
-            # import aioredis
-            # redis = aioredis.from_url("redis://localhost")
-            # await redis.publish(f"agent:{recipient}", response.json())
+            # Implement Redis message broker integration
+            try:
+                import aioredis
+                redis = aioredis.from_url("redis://localhost")
+                if recipient:
+                    await redis.publish(f"agent:{recipient}", response.json())
+                await redis.close()
+            except ImportError:
+                logger.warning("aioredis not available, message broker disabled")
+            except Exception as e:
+                logger.error(f"Redis message broker error: {e}")
             
         except Exception as e:
             logger.error(f"Failed to send message via broker: {e}")
