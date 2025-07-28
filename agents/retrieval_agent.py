@@ -962,7 +962,7 @@ Source: {doc.source}
         """
         try:
             if not documents:
-        return documents
+                return documents
 
             # Format documents for LLM
             doc_texts = []
