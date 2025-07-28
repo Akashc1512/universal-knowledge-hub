@@ -1,0 +1,128 @@
+groups:
+  - name: sarvanom-api-alerts
+    rules:
+      - alert: APIHighErrorRate
+        expr: rate(http_requests_total{job="sarvanom-backend",status=~"5.."}[5m]) / rate(http_requests_total{job="sarvanom-backend"}[5m]) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+          service: sarvanom-api
+        annotations:
+          summary: "High error rate detected on Sarvanom API"
+          description: "Error rate is {{ $value | humanizePercentage }} for the last 5 minutes"
+
+      - alert: APIHighLatency
+        expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket{job="sarvanom-backend"}[5m])) > 2
+        for: 5m
+        labels:
+          severity: warning
+          service: sarvanom-api
+        annotations:
+          summary: "High latency detected on Sarvanom API"
+          description: "95th percentile latency is {{ $value }}s for the last 5 minutes"
+
+      - alert: APIDown
+        expr: up{job="sarvanom-backend"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: sarvanom-api
+        annotations:
+          summary: "Sarvanom API is down"
+          description: "Sarvanom API has been down for more than 1 minute"
+
+      - alert: HighMemoryUsage
+        expr: process_resident_memory_bytes{job="sarvanom-backend"} / (1024*1024*1024) > 2
+        for: 10m
+        labels:
+          severity: warning
+          service: sarvanom-api
+        annotations:
+          summary: "High memory usage"
+          description: "Memory usage is {{ $value }}GB"
+
+      - alert: HighCPUUsage
+        expr: rate(process_cpu_seconds_total{job="sarvanom-backend"}[5m]) * 100 > 80
+        for: 15m
+        labels:
+          severity: warning
+          service: sarvanom-api
+        annotations:
+          summary: "High CPU usage"
+          description: "CPU usage is {{ $value }}%"
+
+  - name: database-alerts
+    rules:
+      - alert: RedisDown
+        expr: up{job="redis"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: redis
+        annotations:
+          summary: "Redis is down"
+          description: "Redis has been down for more than 1 minute"
+
+      - alert: ElasticsearchDown
+        expr: up{job="elasticsearch"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: elasticsearch
+        annotations:
+          summary: "Elasticsearch is down"
+          description: "Elasticsearch has been down for more than 1 minute"
+
+      - alert: QdrantDown
+        expr: up{job="qdrant"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: qdrant
+        annotations:
+          summary: "Qdrant is down"
+          description: "Qdrant vector database has been down for more than 1 minute"
+
+  - name: kong-alerts
+    rules:
+      - alert: KongHighErrorRate
+        expr: rate(kong_http_status{code=~"5.."}[5m]) / rate(kong_http_status[5m]) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+          service: kong
+        annotations:
+          summary: "High error rate on Kong Gateway"
+          description: "Kong error rate is {{ $value | humanizePercentage }}"
+
+      - alert: KongHighLatency
+        expr: histogram_quantile(0.95, rate(kong_request_latency_ms_bucket[5m])) > 1000
+        for: 5m
+        labels:
+          severity: warning
+          service: kong
+        annotations:
+          summary: "High latency on Kong Gateway"
+          description: "95th percentile latency is {{ $value }}ms"
+
+  - name: system-alerts
+    rules:
+      - alert: NodeExporterDown
+        expr: up{job="node-exporter"} == 0
+        for: 1m
+        labels:
+          severity: warning
+          service: monitoring
+        annotations:
+          summary: "Node Exporter is down"
+          description: "Node Exporter has been down for more than 1 minute"
+
+      - alert: HighDiskUsage
+        expr: (node_filesystem_size_bytes{fstype!="tmpfs"} - node_filesystem_free_bytes{fstype!="tmpfs"}) / node_filesystem_size_bytes{fstype!="tmpfs"} > 0.8
+        for: 10m
+        labels:
+          severity: warning
+          service: system
+        annotations:
+          summary: "High disk usage"
+          description: "Disk usage is {{ $value | humanizePercentage }} on {{ $labels.device }}" 

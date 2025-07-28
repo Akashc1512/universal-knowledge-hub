@@ -204,7 +204,7 @@ This information will help us triage your report more quickly.
 
 - **Security Team**: security@universal-knowledge-hub.com
 - **General Support**: support@universal-knowledge-hub.com
-- **Emergency**: +1-XXX-XXX-XXXX (24/7 security hotline)
+- **Emergency**: Contact your system administrator (24/7 security hotline)
 
 ## Acknowledgments
 

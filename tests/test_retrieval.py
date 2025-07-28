@@ -2,9 +2,11 @@ import pytest
 from agents.retrieval_agent import RetrievalAgent, SemanticCache, SearchResult
 from core.types import Document
 
+
 def test_retrieval_init():
     agent = RetrievalAgent()
     assert agent is not None
+
 
 @pytest.mark.asyncio
 async def test_semantic_cache_exact_match():
@@ -14,12 +16,13 @@ async def test_semantic_cache_exact_match():
         documents=[Document(content="Paris is the capital", metadata={})],
         search_type="hybrid",
         query_time_ms=100,
-        total_hits=1
+        total_hits=1,
     )
     await cache.set(query, result)
     cached = await cache.get(query)
     assert cached is not None
     assert cached.documents[0].content == "Paris is the capital"
+
 
 @pytest.mark.asyncio
 async def test_semantic_cache_similarity():
@@ -37,12 +40,13 @@ async def test_semantic_cache_similarity():
         documents=[Document(content="Paris is the capital", metadata={})],
         search_type="hybrid",
         query_time_ms=100,
-        total_hits=1
+        total_hits=1,
     )
     await cache.set(query1, result)
     cached = await cache.get(query2)
     assert cached is not None
     assert cached.documents[0].content == "Paris is the capital"
+
 
 @pytest.mark.asyncio
 async def test_semantic_cache_miss():
@@ -50,6 +54,7 @@ async def test_semantic_cache_miss():
     query = "What is the capital of France?"
     cached = await cache.get(query)
     assert cached is None
+
 
 @pytest.mark.asyncio
 async def test_cache_ttl_expiration():
@@ -60,17 +65,18 @@ async def test_cache_ttl_expiration():
         documents=[Document(content="Paris", metadata={})],
         search_type="hybrid",
         query_time_ms=100,
-        total_hits=1
+        total_hits=1,
     )
     await cache.set(query, result)
     cached = await cache.get(query)
     assert cached is None  # Should be expired
 
+
 @pytest.mark.asyncio
 async def test_retrieval_agent_with_cache():
     agent = RetrievalAgent()
     query = "What is the capital of France?"
-    context = type('Context', (), {'query': query})()
+    context = type("Context", (), {"query": query})()
     result = await agent.hybrid_retrieve(query)
     assert result is not None
-    assert hasattr(result, 'documents')
+    assert hasattr(result, "documents")

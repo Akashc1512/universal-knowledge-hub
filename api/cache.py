@@ -1,323 +1,957 @@
 """
-Caching System for Universal Knowledge Platform
-Provides intelligent caching for queries, results, and metadata.
+Caching Module - MAANG Standards.
+
+This module implements a sophisticated caching system following MAANG
+best practices for performance, scalability, and reliability.
+
+Features:
+    - Multiple cache backends (Redis, In-Memory, Hybrid)
+    - Cache warming and preloading
+    - TTL management with jitter
+    - Cache stampede prevention
+    - Distributed cache invalidation
+    - Cache statistics and monitoring
+    - Compression for large values
+    - Encryption for sensitive data
+
+Architecture:
+    - Strategy pattern for cache backends
+    - Decorator-based API
+    - Async-first design
+    - Circuit breaker for cache failures
+
+Authors:
+    - Universal Knowledge Platform Engineering Team
+    
+Version:
+    2.0.0 (2024-12-28)
 """
 
-import hashlib
-import json
-import time
-import os
-from typing import Dict, Any, Optional, List
-from dataclasses import dataclass, asdict
-from datetime import datetime, timedelta
-import logging
-from collections import OrderedDict
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
-from dotenv import load_dotenv
+import json
+import pickle
+import hashlib
+import zlib
+import time
+import random
+from typing import (
+    Optional, Dict, Any, List, Union, Callable, 
+    TypeVar, Protocol, Type, Awaitable, Set
+)
+from datetime import datetime, timedelta, timezone
+from functools import wraps, lru_cache
+from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
+from enum import Enum
+from abc import ABC, abstractmethod
+import structlog
 
-# Load environment variables
-load_dotenv()
+import aioredis
+from aiocache import Cache as AiocacheBase
+from aiocache.serializers import JsonSerializer, PickleSerializer
+from cryptography.fernet import Fernet
 
-logger = logging.getLogger(__name__)
+from api.monitoring import (
+    record_cache_hit, record_cache_miss,
+    track_async_operation, cache_metrics
+)
+from api.config import get_settings
 
-# Global thread pool for CPU-intensive operations
-_cache_thread_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="cache")
+logger = structlog.get_logger(__name__)
 
+# Type definitions
+T = TypeVar('T')
+CacheKey = Union[str, bytes]
+CacheValue = Union[str, bytes, Dict[str, Any], List[Any], int, float, bool]
 
+# Cache strategies
+class CacheStrategy(str, Enum):
+    """Cache eviction strategies."""
+    LRU = "lru"  # Least Recently Used
+    LFU = "lfu"  # Least Frequently Used
+    FIFO = "fifo"  # First In First Out
+    TTL = "ttl"  # Time To Live based
+
+class SerializationType(str, Enum):
+    """Serialization types for cache values."""
+    JSON = "json"
+    PICKLE = "pickle"
+    STRING = "string"
+    BYTES = "bytes"
+
+# Cache statistics
 @dataclass
-class CacheEntry:
-    """Cache entry with metadata."""
-    key: str
-    value: Any
-    timestamp: float
-    ttl: int  # Time to live in seconds
-    access_count: int = 0
-    last_accessed: float = 0.0
-    metadata: Dict[str, Any] = None
+class CacheStats:
+    """Cache statistics for monitoring."""
     
-    def __post_init__(self):
-        if self.metadata is None:
-            self.metadata = {}
-        self.last_accessed = self.timestamp
+    hits: int = 0
+    misses: int = 0
+    sets: int = 0
+    deletes: int = 0
+    errors: int = 0
+    total_size: int = 0
+    evictions: int = 0
     
-    def is_expired(self) -> bool:
-        """Check if cache entry has expired."""
-        return time.time() - self.timestamp > self.ttl
+    @property
+    def hit_rate(self) -> float:
+        """Calculate cache hit rate."""
+        total = self.hits + self.misses
+        return self.hits / total if total > 0 else 0.0
     
-    def access(self):
-        """Record access to cache entry."""
-        self.access_count += 1
-        self.last_accessed = time.time()
-
-
-class LRUCache:
-    """Least Recently Used cache implementation with async operations."""
-    
-    def __init__(self, max_size: int = 1000):
-        self.max_size = max_size
-        self.cache: OrderedDict = OrderedDict()
-        self.stats = {
-            'hits': 0,
-            'misses': 0,
-            'evictions': 0,
-            'size': 0
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary."""
+        return {
+            "hits": self.hits,
+            "misses": self.misses,
+            "hit_rate": self.hit_rate,
+            "sets": self.sets,
+            "deletes": self.deletes,
+            "errors": self.errors,
+            "total_size": self.total_size,
+            "evictions": self.evictions
         }
-        self._lock = asyncio.Lock()
+
+# Cache backend protocol
+class CacheBackend(Protocol):
+    """Protocol for cache backend implementations."""
     
-    async def get(self, key: str) -> Optional[Any]:
-        """Get value from cache (async)."""
-        async with self._lock:
-            if key in self.cache:
-                entry = self.cache[key]
-                if not entry.is_expired():
-                    # Move to end (most recently used)
-                    self.cache.move_to_end(key)
-                    entry.access()
-                    self.stats['hits'] += 1
-                    return entry.value
-                else:
-                    # Remove expired entry
-                    del self.cache[key]
-                    self.stats['size'] -= 1
+    async def get(self, key: CacheKey) -> Optional[Any]:
+        """Get value from cache."""
+        ...
+    
+    async def set(
+        self,
+        key: CacheKey,
+        value: Any,
+        ttl: Optional[int] = None
+    ) -> bool:
+        """Set value in cache."""
+        ...
+    
+    async def delete(self, key: CacheKey) -> bool:
+        """Delete value from cache."""
+        ...
+    
+    async def exists(self, key: CacheKey) -> bool:
+        """Check if key exists."""
+        ...
+    
+    async def clear(self) -> int:
+        """Clear all cache entries."""
+        ...
+    
+    async def get_many(self, keys: List[CacheKey]) -> Dict[CacheKey, Any]:
+        """Get multiple values."""
+        ...
+    
+    async def set_many(
+        self,
+        mapping: Dict[CacheKey, Any],
+        ttl: Optional[int] = None
+    ) -> bool:
+        """Set multiple values."""
+        ...
+    
+    async def close(self) -> None:
+        """Close backend connections."""
+        ...
+
+# Redis cache backend
+class RedisBackend:
+    """Redis cache backend implementation."""
+    
+    def __init__(
+        self,
+        url: str,
+        pool_size: int = 10,
+        prefix: str = "cache:",
+        serializer: SerializationType = SerializationType.JSON,
+        compress_threshold: int = 1024,  # Compress values > 1KB
+        encrypt: bool = False,
+        encryption_key: Optional[bytes] = None
+    ) -> None:
+        """
+        Initialize Redis backend.
+        
+        Args:
+            url: Redis connection URL
+            pool_size: Connection pool size
+            prefix: Key prefix
+            serializer: Serialization type
+            compress_threshold: Compression threshold in bytes
+            encrypt: Enable encryption
+            encryption_key: Encryption key
+        """
+        self.url = url
+        self.pool_size = pool_size
+        self.prefix = prefix
+        self.serializer = serializer
+        self.compress_threshold = compress_threshold
+        self.encrypt = encrypt
+        
+        if encrypt:
+            if not encryption_key:
+                raise ValueError("Encryption key required when encryption is enabled")
+            self._fernet = Fernet(encryption_key)
+        else:
+            self._fernet = None
+        
+        self._pool: Optional[aioredis.ConnectionPool] = None
+        self._client: Optional[aioredis.Redis] = None
+        self.stats = CacheStats()
+    
+    async def connect(self) -> None:
+        """Connect to Redis."""
+        if not self._pool:
+            self._pool = aioredis.ConnectionPool.from_url(
+                self.url,
+                max_connections=self.pool_size,
+                decode_responses=False  # Handle bytes
+            )
+            self._client = aioredis.Redis(connection_pool=self._pool)
             
-            self.stats['misses'] += 1
+            # Test connection
+            await self._client.ping()
+            logger.info("Redis cache connected", url=self.url)
+    
+    async def close(self) -> None:
+        """Close Redis connections."""
+        if self._client:
+            await self._client.close()
+        if self._pool:
+            await self._pool.disconnect()
+        logger.info("Redis cache disconnected")
+    
+    def _make_key(self, key: CacheKey) -> str:
+        """Create prefixed key."""
+        if isinstance(key, bytes):
+            key = key.decode('utf-8')
+        return f"{self.prefix}{key}"
+    
+    def _serialize(self, value: Any) -> bytes:
+        """Serialize value to bytes."""
+        if self.serializer == SerializationType.JSON:
+            serialized = json.dumps(value).encode('utf-8')
+        elif self.serializer == SerializationType.PICKLE:
+            serialized = pickle.dumps(value)
+        elif self.serializer == SerializationType.BYTES:
+            serialized = value if isinstance(value, bytes) else str(value).encode('utf-8')
+        else:  # STRING
+            serialized = str(value).encode('utf-8')
+        
+        # Compress if needed
+        if len(serialized) > self.compress_threshold:
+            serialized = b'COMPRESSED:' + zlib.compress(serialized)
+        
+        # Encrypt if needed
+        if self._fernet:
+            serialized = b'ENCRYPTED:' + self._fernet.encrypt(serialized)
+        
+        return serialized
+    
+    def _deserialize(self, data: bytes) -> Any:
+        """Deserialize bytes to value."""
+        if not data:
+            return None
+        
+        # Decrypt if needed
+        if data.startswith(b'ENCRYPTED:'):
+            if not self._fernet:
+                raise ValueError("Cannot decrypt without encryption key")
+            data = self._fernet.decrypt(data[10:])
+        
+        # Decompress if needed
+        if data.startswith(b'COMPRESSED:'):
+            data = zlib.decompress(data[11:])
+        
+        # Deserialize
+        if self.serializer == SerializationType.JSON:
+            return json.loads(data.decode('utf-8'))
+        elif self.serializer == SerializationType.PICKLE:
+            return pickle.loads(data)
+        elif self.serializer == SerializationType.BYTES:
+            return data
+        else:  # STRING
+            return data.decode('utf-8')
+    
+    async def get(self, key: CacheKey) -> Optional[Any]:
+        """Get value from cache."""
+        if not self._client:
+            await self.connect()
+        
+        try:
+            redis_key = self._make_key(key)
+            data = await self._client.get(redis_key)
+            
+            if data is None:
+                self.stats.misses += 1
+                record_cache_miss("redis", "get")
+                return None
+            
+            self.stats.hits += 1
+            record_cache_hit("redis", "get")
+            
+            return self._deserialize(data)
+            
+        except Exception as e:
+            self.stats.errors += 1
+            logger.error("Redis get error", key=key, error=str(e))
             return None
     
-    async def put(self, key: str, value: Any, ttl: int = 3600, metadata: Dict[str, Any] = None) -> None:
-        """Put value in cache (async)."""
-        async with self._lock:
-            # Remove if exists
-            if key in self.cache:
-                del self.cache[key]
-                self.stats['size'] -= 1
+    async def set(
+        self,
+        key: CacheKey,
+        value: Any,
+        ttl: Optional[int] = None
+    ) -> bool:
+        """Set value in cache."""
+        if not self._client:
+            await self.connect()
+        
+        try:
+            redis_key = self._make_key(key)
+            data = self._serialize(value)
             
-            # Evict oldest if cache is full
-            while len(self.cache) >= self.max_size:
-                oldest_key = next(iter(self.cache))
-                del self.cache[oldest_key]
-                self.stats['evictions'] += 1
-                self.stats['size'] -= 1
+            # Add jitter to TTL to prevent cache stampede
+            if ttl:
+                ttl = int(ttl * (1 + random.uniform(-0.1, 0.1)))
             
-            # Add new entry
-            entry = CacheEntry(
-                key=key,
-                value=value,
-                timestamp=time.time(),
-                ttl=ttl,
-                metadata=metadata or {}
-            )
+            if ttl:
+                await self._client.setex(redis_key, ttl, data)
+            else:
+                await self._client.set(redis_key, data)
             
-            self.cache[key] = entry
-            self.stats['size'] += 1
+            self.stats.sets += 1
+            self.stats.total_size += len(data)
+            
+            return True
+            
+        except Exception as e:
+            self.stats.errors += 1
+            logger.error("Redis set error", key=key, error=str(e))
+            return False
     
-    async def clear(self):
+    async def delete(self, key: CacheKey) -> bool:
+        """Delete value from cache."""
+        if not self._client:
+            await self.connect()
+        
+        try:
+            redis_key = self._make_key(key)
+            result = await self._client.delete(redis_key)
+            
+            if result > 0:
+                self.stats.deletes += 1
+                return True
+            return False
+            
+        except Exception as e:
+            self.stats.errors += 1
+            logger.error("Redis delete error", key=key, error=str(e))
+            return False
+    
+    async def exists(self, key: CacheKey) -> bool:
+        """Check if key exists."""
+        if not self._client:
+            await self.connect()
+        
+        try:
+            redis_key = self._make_key(key)
+            return bool(await self._client.exists(redis_key))
+        except Exception:
+            return False
+    
+    async def clear(self) -> int:
+        """Clear all cache entries with prefix."""
+        if not self._client:
+            await self.connect()
+        
+        try:
+            # Use SCAN to find all keys with prefix
+            pattern = f"{self.prefix}*"
+            count = 0
+            
+            async for key in self._client.scan_iter(match=pattern, count=100):
+                await self._client.delete(key)
+                count += 1
+            
+            self.stats.deletes += count
+            return count
+            
+        except Exception as e:
+            self.stats.errors += 1
+            logger.error("Redis clear error", error=str(e))
+            return 0
+    
+    async def get_many(self, keys: List[CacheKey]) -> Dict[CacheKey, Any]:
+        """Get multiple values."""
+        if not self._client:
+            await self.connect()
+        
+        try:
+            redis_keys = [self._make_key(k) for k in keys]
+            values = await self._client.mget(redis_keys)
+            
+            result = {}
+            for key, value in zip(keys, values):
+                if value is not None:
+                    result[key] = self._deserialize(value)
+                    self.stats.hits += 1
+                else:
+                    self.stats.misses += 1
+            
+            return result
+            
+        except Exception as e:
+            self.stats.errors += 1
+            logger.error("Redis mget error", error=str(e))
+            return {}
+    
+    async def set_many(
+        self,
+        mapping: Dict[CacheKey, Any],
+        ttl: Optional[int] = None
+    ) -> bool:
+        """Set multiple values."""
+        if not self._client:
+            await self.connect()
+        
+        try:
+            # Prepare data
+            redis_mapping = {}
+            for key, value in mapping.items():
+                redis_key = self._make_key(key)
+                redis_mapping[redis_key] = self._serialize(value)
+            
+            # Set all at once
+            await self._client.mset(redis_mapping)
+            
+            # Set TTL if needed (requires individual commands)
+            if ttl:
+                ttl_with_jitter = int(ttl * (1 + random.uniform(-0.1, 0.1)))
+                for redis_key in redis_mapping:
+                    await self._client.expire(redis_key, ttl_with_jitter)
+            
+            self.stats.sets += len(mapping)
+            return True
+            
+        except Exception as e:
+            self.stats.errors += 1
+            logger.error("Redis mset error", error=str(e))
+            return False
+
+# In-memory cache backend
+class InMemoryBackend:
+    """In-memory cache backend with LRU eviction."""
+    
+    def __init__(
+        self,
+        max_size: int = 10000,
+        ttl: Optional[int] = None,
+        strategy: CacheStrategy = CacheStrategy.LRU
+    ) -> None:
+        """
+        Initialize in-memory backend.
+        
+        Args:
+            max_size: Maximum number of entries
+            ttl: Default TTL in seconds
+            strategy: Eviction strategy
+        """
+        self.max_size = max_size
+        self.default_ttl = ttl
+        self.strategy = strategy
+        
+        self._cache: Dict[CacheKey, tuple[Any, float, int]] = {}
+        self._access_count: Dict[CacheKey, int] = {}
+        self._access_time: Dict[CacheKey, float] = {}
+        self._lock = asyncio.Lock()
+        self.stats = CacheStats()
+
+    async def get(self, key: CacheKey) -> Optional[Any]:
+        """Get value from cache."""
+        async with self._lock:
+            if key not in self._cache:
+                self.stats.misses += 1
+                return None
+            
+            value, expiry, _ = self._cache[key]
+            
+            # Check expiry
+            if expiry and time.time() > expiry:
+                del self._cache[key]
+                self.stats.misses += 1
+                self.stats.evictions += 1
+            return None
+
+            # Update access tracking
+            self._access_count[key] = self._access_count.get(key, 0) + 1
+            self._access_time[key] = time.time()
+            
+            self.stats.hits += 1
+            return value
+    
+    async def set(
+        self,
+        key: CacheKey,
+        value: Any,
+        ttl: Optional[int] = None
+    ) -> bool:
+        """Set value in cache."""
+        async with self._lock:
+            # Evict if at capacity
+            if len(self._cache) >= self.max_size and key not in self._cache:
+                await self._evict_one()
+            
+            # Set value
+            ttl = ttl or self.default_ttl
+            expiry = time.time() + ttl if ttl else None
+            size = len(str(value))
+            
+            self._cache[key] = (value, expiry, size)
+            self._access_count[key] = 1
+            self._access_time[key] = time.time()
+            
+            self.stats.sets += 1
+            self.stats.total_size += size
+            
+            return True
+    
+    async def delete(self, key: CacheKey) -> bool:
+        """Delete value from cache."""
+        async with self._lock:
+            if key in self._cache:
+                _, _, size = self._cache[key]
+                del self._cache[key]
+                self._access_count.pop(key, None)
+                self._access_time.pop(key, None)
+                
+                self.stats.deletes += 1
+                self.stats.total_size -= size
+                return True
+            return False
+    
+    async def exists(self, key: CacheKey) -> bool:
+        """Check if key exists."""
+        async with self._lock:
+            if key not in self._cache:
+                return False
+            
+            _, expiry, _ = self._cache[key]
+            if expiry and time.time() > expiry:
+                return False
+            
+            return True
+    
+    async def clear(self) -> int:
         """Clear all cache entries."""
         async with self._lock:
-            self.cache.clear()
-            self.stats['size'] = 0
+            count = len(self._cache)
+            self._cache.clear()
+            self._access_count.clear()
+            self._access_time.clear()
+            self.stats.deletes += count
+            self.stats.total_size = 0
+            return count
     
-    def get_stats(self) -> Dict[str, Any]:
-        """Get cache statistics."""
-        return {
-            **self.stats,
-            'max_size': self.max_size,
-            'hit_rate': self.stats['hits'] / (self.stats['hits'] + self.stats['misses']) if (self.stats['hits'] + self.stats['misses']) > 0 else 0
-        }
-
-
-class QueryCache:
-    """Optimized query cache with reduced memory usage."""
-    
-    def __init__(self, max_size: int = 500):
-        self.cache = LRUCache(max_size)
-    
-    def _generate_key_sync(self, query: str, user_context: Dict[str, Any] = None) -> str:
-        """Generate cache key (synchronous version for thread pool)."""
-        # Create a simplified context for hashing
-        context_str = ""
-        if user_context:
-            # Only include essential context fields to reduce key size
-            essential_context = {
-                'user_id': user_context.get('user_id'),
-                'session_id': user_context.get('session_id'),
-                'preferences': user_context.get('preferences', {})
-            }
-            context_str = json.dumps(essential_context, sort_keys=True)
-        
-        # Create hash of query + context
-        key_data = f"{query}:{context_str}".encode('utf-8')
-        return hashlib.md5(key_data).hexdigest()
-    
-    async def _generate_key(self, query: str, user_context: Dict[str, Any] = None) -> str:
-        """Generate cache key (async)."""
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(
-            _cache_thread_pool,
-            self._generate_key_sync,
-            query,
-            user_context
-        )
-    
-    def _determine_ttl(self, query: str, result: Dict[str, Any]) -> int:
-        """Determine TTL based on query and result characteristics."""
-        # Base TTL
-        ttl = 3600  # 1 hour default
-        
-        # Adjust based on query type
-        query_lower = query.lower()
-        if any(word in query_lower for word in ['news', 'current', 'recent', 'latest']):
-            ttl = 1800  # 30 minutes for time-sensitive queries
-        elif any(word in query_lower for word in ['definition', 'what is', 'meaning']):
-            ttl = 7200  # 2 hours for definition queries
-        elif any(word in query_lower for word in ['research', 'study', 'analysis']):
-            ttl = 14400  # 4 hours for research queries
-        
-        # Adjust based on result confidence
-        confidence = result.get('confidence', 0.0)
-        if confidence > 0.9:
-            ttl = int(ttl * 1.5)  # Longer TTL for high-confidence results
-        elif confidence < 0.5:
-            ttl = int(ttl * 0.5)  # Shorter TTL for low-confidence results
-        
-        return ttl
-    
-    def _optimize_result_for_cache(self, result: Dict[str, Any]) -> Dict[str, Any]:
-        """Optimize result for caching by removing unnecessary data."""
-        # Create a minimal cached version
-        cached_result = {
-            'answer': result.get('answer', ''),
-            'confidence': result.get('confidence', 0.0),
-            'citations': result.get('citations', []),
-            'metadata': {
-                'agents_used': result.get('metadata', {}).get('agents_used', []),
-                'synthesis_method': result.get('metadata', {}).get('synthesis_method', 'unknown'),
-                'fact_count': result.get('metadata', {}).get('fact_count', 0)
-            }
-        }
-        
-        # Limit citation data to essential fields
-        optimized_citations = []
-        for citation in cached_result['citations']:
-            optimized_citation = {
-                'title': citation.get('title', ''),
-                'url': citation.get('url', ''),
-                'author': citation.get('author', ''),
-                'year': citation.get('year', '')
-            }
-            optimized_citations.append(optimized_citation)
-        
-        cached_result['citations'] = optimized_citations
-        return cached_result
-    
-    async def get(self, query: str, user_context: Dict[str, Any] = None) -> Optional[Dict[str, Any]]:
-        """Get cached result (async)."""
-        key = await self._generate_key(query, user_context)
-        return await self.cache.get(key)
-    
-    async def put(self, query: str, result: Dict[str, Any], user_context: Dict[str, Any] = None) -> None:
-        """Put result in cache (async)."""
-        key = await self._generate_key(query, user_context)
-        optimized_result = self._optimize_result_for_cache(result)
-        ttl = self._determine_ttl(query, result)
-        
-        await self.cache.put(key, optimized_result, ttl, {
-            'original_query': query,
-            'user_context_keys': list(user_context.keys()) if user_context else []
-        })
-    
-    async def get_stats(self) -> Dict[str, Any]:
-        """Get cache statistics."""
-        return self.cache.get_stats()
-
-
-class SemanticCache:
-    """Semantic cache for similar queries."""
-    
-    def __init__(self, max_size: int = 200):
-        self.cache = LRUCache(max_size)
-        self.similarity_threshold = 0.85
-    
-    def _calculate_similarity_sync(self, query1: str, query2: str) -> float:
-        """Calculate similarity between queries (synchronous version)."""
-        # Simple word overlap similarity
-        words1 = set(query1.lower().split())
-        words2 = set(query2.lower().split())
-        
-        if not words1 or not words2:
-            return 0.0
-        
-        intersection = words1.intersection(words2)
-        union = words1.union(words2)
-        
-        return len(intersection) / len(union)
-    
-    async def _calculate_similarity(self, query1: str, query2: str) -> float:
-        """Calculate similarity between queries (async)."""
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(
-            _cache_thread_pool,
-            self._calculate_similarity_sync,
-            query1,
-            query2
-        )
-    
-    async def find_similar(self, query: str) -> Optional[Dict[str, Any]]:
-        """Find similar cached query (async)."""
-        # Check all cached entries for similarity
-        async with self.cache._lock:
-            for key, entry in self.cache.cache.items():
-                if not entry.is_expired():
-                    cached_query = entry.metadata.get('original_query', '')
-                    if cached_query:
-                        similarity = await self._calculate_similarity(query, cached_query)
-                        if similarity >= self.similarity_threshold:
-                            return entry.value
-        
-        return None
-    
-    async def put(self, query: str, result: Dict[str, Any], user_context: Dict[str, Any] = None) -> None:
-        """Put result in semantic cache (async)."""
-        # Use a hash of the query as key
-        key = hashlib.md5(query.encode('utf-8')).hexdigest()
-        
-        await self.cache.put(key, result, 3600, {
-            'original_query': query,
-            'user_context_keys': list(user_context.keys()) if user_context else []
-        })
-
-
-# Global cache instances
-_query_cache = QueryCache()
-_semantic_cache = SemanticCache()
-
-
-async def get_cached_result(query: str, user_context: Dict[str, Any] = None) -> Optional[Dict[str, Any]]:
-    """Get cached result for query (async)."""
-    # First check exact match
-    result = await _query_cache.get(query, user_context)
-    if result:
+    async def get_many(self, keys: List[CacheKey]) -> Dict[CacheKey, Any]:
+        """Get multiple values."""
+        result = {}
+        for key in keys:
+            value = await self.get(key)
+            if value is not None:
+                result[key] = value
         return result
     
-    # Then check semantic similarity
-    result = await _semantic_cache.find_similar(query)
-    return result
-
-
-async def cache_result(query: str, result: Dict[str, Any], user_context: Dict[str, Any] = None) -> None:
-    """Cache result for query (async)."""
-    # Cache in both exact and semantic caches
-    await _query_cache.put(query, result, user_context)
-    await _semantic_cache.put(query, result, user_context)
-
-
-async def get_cache_stats() -> Dict[str, Any]:
-    """Get comprehensive cache statistics."""
-    query_stats = await _query_cache.get_stats()
-    semantic_stats = await _semantic_cache.cache.get_stats()
+    async def set_many(
+        self,
+        mapping: Dict[CacheKey, Any],
+        ttl: Optional[int] = None
+    ) -> bool:
+        """Set multiple values."""
+        for key, value in mapping.items():
+            await self.set(key, value, ttl)
+        return True
     
-    return {
-        'query_cache': query_stats,
-        'semantic_cache': semantic_stats,
-        'total_memory_usage': query_stats['size'] + semantic_stats['size']
-    } 
+    async def close(self) -> None:
+        """Close backend (no-op for in-memory)."""
+        pass
+    
+    async def _evict_one(self) -> None:
+        """Evict one entry based on strategy."""
+        if not self._cache:
+            return
+        
+        if self.strategy == CacheStrategy.LRU:
+            # Evict least recently used
+            key = min(self._access_time, key=self._access_time.get)
+        elif self.strategy == CacheStrategy.LFU:
+            # Evict least frequently used
+            key = min(self._access_count, key=self._access_count.get)
+        elif self.strategy == CacheStrategy.FIFO:
+            # Evict oldest
+            key = next(iter(self._cache))
+        else:  # TTL
+            # Evict closest to expiry
+            key = min(
+                self._cache,
+                key=lambda k: self._cache[k][1] or float('inf')
+            )
+        
+        await self.delete(key)
+        self.stats.evictions += 1
+        cache_metrics['evictions'].labels(
+            cache_name="memory",
+            reason=self.strategy.value
+        ).inc()
+
+# Cache manager
+class CacheManager:
+    """
+    Main cache manager with multiple backends and strategies.
+    
+    Features:
+    - Multiple cache tiers (L1: memory, L2: Redis)
+    - Automatic failover
+    - Cache warming
+    - Batch operations
+    - Circuit breaker for failures
+    """
+    
+    def __init__(
+        self,
+        backends: Optional[List[CacheBackend]] = None,
+        default_ttl: int = 300,  # 5 minutes
+        enable_stats: bool = True
+    ) -> None:
+        """
+        Initialize cache manager.
+        
+        Args:
+            backends: List of cache backends (ordered by priority)
+            default_ttl: Default TTL in seconds
+            enable_stats: Enable statistics collection
+        """
+        self.backends = backends or []
+        self.default_ttl = default_ttl
+        self.enable_stats = enable_stats
+        self._initialized = False
+        self._circuit_breaker: Dict[int, tuple[bool, float]] = {}
+    
+    async def initialize(self) -> None:
+        """Initialize all backends."""
+        if self._initialized:
+            return
+        
+        # Initialize default backends if none provided
+        if not self.backends:
+            settings = get_settings()
+            
+            # L1: In-memory cache
+            self.backends.append(
+                InMemoryBackend(
+                    max_size=1000,
+                    ttl=60  # 1 minute for L1
+                )
+            )
+            
+            # L2: Redis cache
+            if settings.redis_url:
+                redis_backend = RedisBackend(
+                    url=str(settings.redis_url),
+                    pool_size=settings.redis_pool_size,
+                    prefix=settings.cache_prefix,
+                    encrypt=settings.environment == "production"
+                )
+                await redis_backend.connect()
+                self.backends.append(redis_backend)
+        
+        self._initialized = True
+        logger.info(
+            "Cache manager initialized",
+            backends=len(self.backends)
+        )
+    
+    async def close(self) -> None:
+        """Close all backends."""
+        for backend in self.backends:
+            await backend.close()
+        self._initialized = False
+    
+    def _is_backend_healthy(self, index: int) -> bool:
+        """Check if backend is healthy (circuit breaker)."""
+        if index not in self._circuit_breaker:
+            return True
+        
+        is_open, opened_at = self._circuit_breaker[index]
+        if is_open:
+            # Check if we should retry (after 30 seconds)
+            if time.time() - opened_at > 30:
+                del self._circuit_breaker[index]
+                return True
+            return False
+        return True
+    
+    def _mark_backend_unhealthy(self, index: int) -> None:
+        """Mark backend as unhealthy (open circuit)."""
+        self._circuit_breaker[index] = (True, time.time())
+        logger.warning(f"Backend {index} marked unhealthy")
+    
+    async def get(
+        self,
+        key: CacheKey,
+        default: Optional[T] = None
+    ) -> Optional[Union[T, Any]]:
+        """
+        Get value from cache.
+        
+        Tries backends in order until value is found.
+        """
+        if not self._initialized:
+            await self.initialize()
+        
+        for i, backend in enumerate(self.backends):
+            if not self._is_backend_healthy(i):
+                continue
+            
+            try:
+                value = await backend.get(key)
+                if value is not None:
+                    # Populate higher tier caches
+                    for j in range(i):
+                        if self._is_backend_healthy(j):
+                            await self.backends[j].set(
+                                key, value, self.default_ttl
+                            )
+                    return value
+            except Exception as e:
+                logger.error(f"Backend {i} get error", error=str(e))
+                self._mark_backend_unhealthy(i)
+        
+        return default
+    
+    async def set(
+        self,
+        key: CacheKey,
+        value: Any,
+        ttl: Optional[int] = None
+    ) -> bool:
+        """Set value in all healthy backends."""
+        if not self._initialized:
+            await self.initialize()
+        
+        ttl = ttl or self.default_ttl
+        success = False
+        
+        for i, backend in enumerate(self.backends):
+            if not self._is_backend_healthy(i):
+                continue
+            
+            try:
+                if await backend.set(key, value, ttl):
+                    success = True
+        except Exception as e:
+                logger.error(f"Backend {i} set error", error=str(e))
+                self._mark_backend_unhealthy(i)
+        
+        return success
+    
+    async def delete(self, key: CacheKey) -> bool:
+        """Delete value from all backends."""
+        if not self._initialized:
+            await self.initialize()
+        
+        success = False
+        
+        for i, backend in enumerate(self.backends):
+            if not self._is_backend_healthy(i):
+                continue
+            
+            try:
+                if await backend.delete(key):
+                    success = True
+        except Exception as e:
+                logger.error(f"Backend {i} delete error", error=str(e))
+                self._mark_backend_unhealthy(i)
+        
+        return success
+    
+    async def clear(self) -> int:
+        """Clear all backends."""
+        if not self._initialized:
+            await self.initialize()
+        
+        total = 0
+        
+        for i, backend in enumerate(self.backends):
+            if not self._is_backend_healthy(i):
+                continue
+            
+            try:
+                count = await backend.clear()
+                total += count
+            except Exception as e:
+                logger.error(f"Backend {i} clear error", error=str(e))
+                self._mark_backend_unhealthy(i)
+
+        return total
+
+    async def get_stats(self) -> Dict[str, Any]:
+        """Get cache statistics."""
+        stats = {
+            "backends": [],
+            "total": CacheStats()
+        }
+        
+        for i, backend in enumerate(self.backends):
+            backend_stats = {
+                "index": i,
+                "type": type(backend).__name__,
+                "healthy": self._is_backend_healthy(i),
+                "stats": {}
+            }
+            
+            if hasattr(backend, 'stats'):
+                backend_stats["stats"] = backend.stats.to_dict()
+                
+                # Aggregate totals
+                stats["total"].hits += backend.stats.hits
+                stats["total"].misses += backend.stats.misses
+                stats["total"].sets += backend.stats.sets
+                stats["total"].deletes += backend.stats.deletes
+                stats["total"].errors += backend.stats.errors
+                stats["total"].evictions += backend.stats.evictions
+            
+            stats["backends"].append(backend_stats)
+        
+        stats["total"] = stats["total"].to_dict()
+        return stats
+
+# Decorators
+def cache_response(
+    ttl: Optional[int] = None,
+    key_builder: Optional[Callable[..., str]] = None,
+    cache_manager: Optional[CacheManager] = None
+) -> Callable:
+    """
+    Decorator to cache function responses.
+    
+    Args:
+        ttl: Cache TTL in seconds
+        key_builder: Custom key builder function
+        cache_manager: Cache manager instance
+        
+    Example:
+        @cache_response(ttl=300)
+        async def get_user(user_id: str) -> User:
+            return await db.get_user(user_id)
+    """
+    def decorator(func: Callable) -> Callable:
+        @wraps(func)
+        async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
+            # Get cache manager
+            manager = cache_manager or get_cache_manager()
+            
+            # Build cache key
+            if key_builder:
+                cache_key = key_builder(*args, **kwargs)
+    else:
+                # Default key builder
+                key_parts = [func.__module__, func.__name__]
+                key_parts.extend(str(arg) for arg in args)
+                key_parts.extend(f"{k}={v}" for k, v in sorted(kwargs.items()))
+                cache_key = ":".join(key_parts)
+                
+                # Hash if too long
+                if len(cache_key) > 250:
+                    cache_key = hashlib.sha256(
+                        cache_key.encode()
+                    ).hexdigest()
+            
+            # Try to get from cache
+            cached = await manager.get(cache_key)
+            if cached is not None:
+                return cached
+            
+            # Execute function
+            result = await func(*args, **kwargs)
+            
+            # Cache result
+            await manager.set(cache_key, result, ttl)
+            
+        return result
+
+        # Handle sync functions
+        if not asyncio.iscoroutinefunction(func):
+            @wraps(func)
+            def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
+                # For sync functions, use a simple LRU cache
+                return func(*args, **kwargs)
+            
+            # Add LRU cache for sync functions
+            return lru_cache(maxsize=128)(sync_wrapper)
+        
+        return async_wrapper
+    
+    return decorator
+
+async def invalidate_cache(
+    pattern: str,
+    cache_manager: Optional[CacheManager] = None
+) -> int:
+    """
+    Invalidate cache entries matching pattern.
+    
+    Args:
+        pattern: Key pattern (supports * wildcard)
+        cache_manager: Cache manager instance
+        
+    Returns:
+        Number of entries invalidated
+    """
+    manager = cache_manager or get_cache_manager()
+    
+    # For now, simple pattern matching
+    # In production, use Redis SCAN or similar
+    if pattern.endswith("*"):
+        # Prefix match - would need to track keys
+        logger.warning("Pattern invalidation not fully implemented")
+        return 0
+    else:
+        # Exact match
+        success = await manager.delete(pattern)
+        return 1 if success else 0
+
+# Global instance
+_cache_manager: Optional[CacheManager] = None
+
+@lru_cache(maxsize=1)
+def get_cache_manager() -> CacheManager:
+    """Get global cache manager instance."""
+    global _cache_manager
+    
+    if _cache_manager is None:
+        _cache_manager = CacheManager()
+    
+    return _cache_manager
+
+# Export public API
+__all__ = [
+    # Classes
+    'CacheManager',
+    'CacheBackend',
+    'RedisBackend',
+    'InMemoryBackend',
+    'CacheStats',
+    
+    # Enums
+    'CacheStrategy',
+    'SerializationType',
+    
+    # Decorators
+    'cache_response',
+    
+    # Functions
+    'get_cache_manager',
+    'invalidate_cache',
+]

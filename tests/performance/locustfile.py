@@ -1,13 +1,33 @@
+#!/usr/bin/env python3
 """
-Performance testing for Universal Knowledge Platform using Locust.
-Tests API endpoints under various load conditions.
+🐝 LOCUST PERFORMANCE TESTING
+Universal Knowledge Platform - Load Testing with Locust
+
+Simulates realistic user behavior and measures system performance under load.
 """
 
-import time
-import random
 import json
-from locust import HttpUser, task, between, events
+import os
+import random
+import time
 from typing import Dict, Any
+
+from locust import HttpUser, task, between
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+
+# Test configuration with environment variables
+PERFORMANCE_CONFIG = {
+    "host": os.getenv("TEST_API_BASE_URL", "http://localhost:8003"),
+    "min_wait": int(os.getenv("LOCUST_MIN_WAIT", "1")),
+    "max_wait": int(os.getenv("LOCUST_MAX_WAIT", "3")),
+    "default_token_budget": int(os.getenv("DEFAULT_TOKEN_BUDGET", "1000")),
+    "test_users": int(os.getenv("LOCUST_USERS", "1000")),
+    "confidence_threshold": float(os.getenv("CONFIDENCE_THRESHOLD", "0.7")),
+    "index_name": os.getenv("ELASTICSEARCH_INDEX", "universal-knowledge-hub"),
+}
 
 
 class UniversalKnowledgeHubUser(HttpUser):
@@ -15,30 +35,29 @@ class UniversalKnowledgeHubUser(HttpUser):
     Locust user class for testing Universal Knowledge Platform.
     Simulates real user behavior with various API interactions.
     """
-    
+
     wait_time = between(1, 3)  # Wait 1-3 seconds between requests
-    
+
     def on_start(self):
         """Initialize user session."""
         self.api_key = None
         self.session_data = {}
-        
+
         # Try to authenticate (if credentials are available)
         self._authenticate()
-    
+
     def _authenticate(self):
         """Authenticate user and get API key."""
         try:
             # This would be replaced with actual authentication
             # For now, we'll use a mock API key
             self.api_key = "test-api-key-12345"
-            self.client.headers.update({
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json"
-            })
+            self.client.headers.update(
+                {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+            )
         except Exception as e:
             print(f"Authentication failed: {e}")
-    
+
     @task(3)
     def health_check(self):
         """Test health endpoint (high frequency)."""
@@ -47,7 +66,7 @@ class UniversalKnowledgeHubUser(HttpUser):
                 response.success()
             else:
                 response.failure(f"Health check failed: {response.status_code}")
-    
+
     @task(2)
     def get_agents(self):
         """Test agents listing endpoint."""
@@ -60,7 +79,7 @@ class UniversalKnowledgeHubUser(HttpUser):
                     response.failure("No agents found in response")
             else:
                 response.failure(f"Agents endpoint failed: {response.status_code}")
-    
+
     @task(5)
     def simple_query(self):
         """Test simple query processing (most common)."""
@@ -74,16 +93,16 @@ class UniversalKnowledgeHubUser(HttpUser):
             "Explain data science",
             "What is natural language processing?",
             "How does computer vision work?",
-            "What is reinforcement learning?"
+            "What is reinforcement learning?",
         ]
-        
+
         query_data = {
             "query": random.choice(queries),
             "max_tokens": 500,
             "confidence_threshold": 0.7,
-            "user_context": {"domain": "technology"}
+            "user_context": {"domain": "technology"},
         }
-        
+
         with self.client.post("/query", json=query_data, catch_response=True) as response:
             if response.status_code == 200:
                 data = response.json()
@@ -95,7 +114,7 @@ class UniversalKnowledgeHubUser(HttpUser):
                     response.failure("Invalid response format")
             else:
                 response.failure(f"Query failed: {response.status_code}")
-    
+
     @task(2)
     def complex_query(self):
         """Test complex query processing."""
@@ -104,9 +123,9 @@ class UniversalKnowledgeHubUser(HttpUser):
             "Compare and contrast supervised learning, unsupervised learning, and reinforcement learning with real-world examples and use cases.",
             "Discuss the ethical implications of artificial intelligence in healthcare, including privacy concerns, bias in algorithms, and the future of medical diagnosis.",
             "Analyze the impact of natural language processing on modern communication, including chatbots, translation services, and content generation.",
-            "Explore the challenges and opportunities of implementing AI in autonomous vehicles, covering safety, regulation, and technological limitations."
+            "Explore the challenges and opportunities of implementing AI in autonomous vehicles, covering safety, regulation, and technological limitations.",
         ]
-        
+
         query_data = {
             "query": random.choice(complex_queries),
             "max_tokens": 1000,
@@ -114,10 +133,10 @@ class UniversalKnowledgeHubUser(HttpUser):
             "user_context": {
                 "domain": "technology",
                 "complexity": "high",
-                "detail_level": "comprehensive"
-            }
+                "detail_level": "comprehensive",
+            },
         }
-        
+
         with self.client.post("/query", json=query_data, catch_response=True) as response:
             if response.status_code == 200:
                 data = response.json()
@@ -127,34 +146,24 @@ class UniversalKnowledgeHubUser(HttpUser):
                     response.failure("Complex query response too short")
             else:
                 response.failure(f"Complex query failed: {response.status_code}")
-    
+
     @task(1)
     def bulk_queries(self):
         """Test bulk query processing."""
-        bulk_queries = [
-            "What is AI?",
-            "What is ML?",
-            "What is DL?",
-            "What is NLP?",
-            "What is CV?"
-        ]
-        
+        bulk_queries = ["What is AI?", "What is ML?", "What is DL?", "What is NLP?", "What is CV?"]
+
         for query in bulk_queries:
-            query_data = {
-                "query": query,
-                "max_tokens": 200,
-                "confidence_threshold": 0.6
-            }
-            
+            query_data = {"query": query, "max_tokens": 200, "confidence_threshold": 0.6}
+
             with self.client.post("/query", json=query_data, catch_response=True) as response:
                 if response.status_code == 200:
                     response.success()
                 else:
                     response.failure(f"Bulk query failed: {response.status_code}")
-            
+
             # Small delay between bulk queries
             time.sleep(0.1)
-    
+
     @task(1)
     def edge_case_queries(self):
         """Test edge cases and error conditions."""
@@ -168,13 +177,13 @@ class UniversalKnowledgeHubUser(HttpUser):
             "admin' OR '1'='1",  # SQL injection
             "javascript:alert('xss')",  # JavaScript injection
         ]
-        
+
         query_data = {
             "query": random.choice(edge_queries),
             "max_tokens": 100,
-            "confidence_threshold": 0.5
+            "confidence_threshold": 0.5,
         }
-        
+
         with self.client.post("/query", json=query_data, catch_response=True) as response:
             # Edge cases should be handled gracefully
             if response.status_code in [200, 400, 422]:
@@ -187,9 +196,9 @@ class AdminUser(UniversalKnowledgeHubUser):
     """
     Admin user class for testing administrative functions.
     """
-    
+
     wait_time = between(2, 5)  # Slower pace for admin actions
-    
+
     @task(1)
     def system_health_check(self):
         """Test detailed system health check."""
@@ -203,7 +212,7 @@ class AdminUser(UniversalKnowledgeHubUser):
                     response.failure("Incomplete health information")
             else:
                 response.failure(f"Health check failed: {response.status_code}")
-    
+
     @task(1)
     def get_system_stats(self):
         """Test system statistics endpoint (if available)."""
@@ -218,9 +227,9 @@ class ContentManagerUser(UniversalKnowledgeHubUser):
     """
     Content manager user class for testing content management functions.
     """
-    
+
     wait_time = between(3, 8)  # Slower pace for content management
-    
+
     @task(1)
     def upload_content(self):
         """Test content upload functionality."""
@@ -229,28 +238,25 @@ class ContentManagerUser(UniversalKnowledgeHubUser):
             "title": f"Test Document {random.randint(1, 1000)}",
             "content": "This is a test document for performance testing.",
             "category": "test",
-            "tags": ["performance", "test", "document"]
+            "tags": ["performance", "test", "document"],
         }
-        
+
         with self.client.post("/content/upload", json=upload_data, catch_response=True) as response:
             if response.status_code in [200, 201]:
                 response.success()
             else:
                 response.failure(f"Content upload failed: {response.status_code}")
-    
+
     @task(2)
     def search_content(self):
         """Test content search functionality."""
         search_terms = ["test", "document", "performance", "upload"]
-        
+
         search_data = {
             "query": random.choice(search_terms),
-            "filters": {
-                "category": "test",
-                "date_range": "last_7_days"
-            }
+            "filters": {"category": "test", "date_range": "last_7_days"},
         }
-        
+
         with self.client.post("/content/search", json=search_data, catch_response=True) as response:
             if response.status_code == 200:
                 response.success()
@@ -260,7 +266,18 @@ class ContentManagerUser(UniversalKnowledgeHubUser):
 
 # Custom event handlers for detailed monitoring
 @events.request.add_listener
-def my_request_handler(request_type, name, response_time, response_length, response, context, exception, start_time, url, **kwargs):
+def my_request_handler(
+    request_type,
+    name,
+    response_time,
+    response_length,
+    response,
+    context,
+    exception,
+    start_time,
+    url,
+    **kwargs,
+):
     """Custom request handler for detailed monitoring."""
     if exception:
         print(f"Request failed: {name} - {exception}")
@@ -283,20 +300,18 @@ def on_test_stop(environment, **kwargs):
 # Custom metrics collection
 class CustomMetrics:
     """Custom metrics collection for detailed performance analysis."""
-    
+
     def __init__(self):
         self.query_times = []
         self.error_counts = {}
         self.response_sizes = []
-    
+
     def record_query_time(self, query_type: str, response_time: float):
         """Record query response time."""
-        self.query_times.append({
-            "type": query_type,
-            "time": response_time,
-            "timestamp": time.time()
-        })
-    
+        self.query_times.append(
+            {"type": query_type, "time": response_time, "timestamp": time.time()}
+        )
+
     def record_error(self, endpoint: str, error_type: str):
         """Record error occurrence."""
         if endpoint not in self.error_counts:
@@ -304,14 +319,10 @@ class CustomMetrics:
         if error_type not in self.error_counts[endpoint]:
             self.error_counts[endpoint][error_type] = 0
         self.error_counts[endpoint][error_type] += 1
-    
+
     def record_response_size(self, endpoint: str, size: int):
         """Record response size."""
-        self.response_sizes.append({
-            "endpoint": endpoint,
-            "size": size,
-            "timestamp": time.time()
-        })
+        self.response_sizes.append({"endpoint": endpoint, "size": size, "timestamp": time.time()})
 
 
 # Global metrics instance
@@ -321,71 +332,39 @@ metrics = CustomMetrics()
 # Configuration for different test scenarios
 class TestScenarios:
     """Predefined test scenarios for different load conditions."""
-    
+
     @staticmethod
     def light_load():
         """Light load scenario - few users, simple queries."""
-        return {
-            "users": 10,
-            "spawn_rate": 1,
-            "run_time": "5m"
-        }
-    
+        return {"users": 10, "spawn_rate": 1, "run_time": "5m"}
+
     @staticmethod
     def normal_load():
         """Normal load scenario - typical usage patterns."""
-        return {
-            "users": 50,
-            "spawn_rate": 5,
-            "run_time": "10m"
-        }
-    
+        return {"users": 50, "spawn_rate": 5, "run_time": "10m"}
+
     @staticmethod
     def heavy_load():
         """Heavy load scenario - high concurrent users."""
-        return {
-            "users": 200,
-            "spawn_rate": 10,
-            "run_time": "15m"
-        }
-    
+        return {"users": 200, "spawn_rate": 10, "run_time": "15m"}
+
     @staticmethod
     def stress_test():
         """Stress test scenario - maximum load."""
-        return {
-            "users": 500,
-            "spawn_rate": 20,
-            "run_time": "20m"
-        }
-    
+        return {"users": 500, "spawn_rate": 20, "run_time": "20m"}
+
     @staticmethod
     def spike_test():
         """Spike test scenario - sudden load increase."""
-        return {
-            "users": 1000,
-            "spawn_rate": 100,
-            "run_time": "5m"
-        }
+        return {"users": 1000, "spawn_rate": 100, "run_time": "5m"}
 
 
 # Performance thresholds
 PERFORMANCE_THRESHOLDS = {
-    "health_check": {
-        "p95_response_time": 100,  # ms
-        "error_rate": 0.01  # 1%
-    },
-    "simple_query": {
-        "p95_response_time": 2000,  # ms
-        "error_rate": 0.05  # 5%
-    },
-    "complex_query": {
-        "p95_response_time": 5000,  # ms
-        "error_rate": 0.10  # 10%
-    },
-    "bulk_queries": {
-        "p95_response_time": 3000,  # ms
-        "error_rate": 0.08  # 8%
-    }
+    "health_check": {"p95_response_time": 100, "error_rate": 0.01},  # ms  # 1%
+    "simple_query": {"p95_response_time": 2000, "error_rate": 0.05},  # ms  # 5%
+    "complex_query": {"p95_response_time": 5000, "error_rate": 0.10},  # ms  # 10%
+    "bulk_queries": {"p95_response_time": 3000, "error_rate": 0.08},  # ms  # 8%
 }
 
 
@@ -397,15 +376,15 @@ def run_performance_test(scenario: str):
         "normal": TestScenarios.normal_load(),
         "heavy": TestScenarios.heavy_load(),
         "stress": TestScenarios.stress_test(),
-        "spike": TestScenarios.spike_test()
+        "spike": TestScenarios.spike_test(),
     }
-    
+
     if scenario not in scenarios:
         raise ValueError(f"Unknown scenario: {scenario}")
-    
+
     config = scenarios[scenario]
     print(f"Running {scenario} load test with {config['users']} users")
-    
+
     # This would be executed via command line:
     # locust -f locustfile.py --host=https://api.universal-knowledge-hub.com
     # --users={config['users']} --spawn-rate={config['spawn_rate']}
@@ -416,4 +395,4 @@ if __name__ == "__main__":
     # Example usage
     print("Universal Knowledge Platform Performance Test")
     print("Available scenarios: light, normal, heavy, stress, spike")
-    print("Run with: locust -f locustfile.py --host=https://api.universal-knowledge-hub.com") 
+    print("Run with: locust -f locustfile.py --host=https://api.universal-knowledge-hub.com")

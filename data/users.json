@@ -1,0 +1,22 @@
+{
+  "admin": {
+    "username": "admin",
+    "email": "admin@sarvanom.ai",
+    "hashed_password": "$2b$12$8/bzn8k1kjk.bm/Zjctame46W/WsDmB6VRtVjZ78W2cn6BFsxJZtS",
+    "role": "admin",
+    "full_name": "System Administrator",
+    "is_active": true,
+    "created_at": "2025-07-28T04:22:59.238989",
+    "last_login": null
+  },
+  "user": {
+    "username": "user",
+    "email": "user@sarvanom.ai",
+    "hashed_password": "$2b$12$SNCvc.Ex.K3dfX2WdRI7JeqTWXpdjkIkzjNqdktSx3Hi25RpIAvXS",
+    "role": "user",
+    "full_name": "Default User",
+    "is_active": true,
+    "created_at": "2025-07-28T04:22:59.514405",
+    "last_login": null
+  }
+}

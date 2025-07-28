@@ -1,0 +1,141 @@
+_format_version: "3.0"
+
+services:
+  - name: sarvanom-api
+    url: http://sarvanom-backend:8002
+    routes:
+      - name: api-routes
+        paths:
+          - /query
+          - /health
+          - /metrics
+          - /analytics
+        strip_path: false
+        preserve_host: true
+        methods:
+          - GET
+          - POST
+          - OPTIONS
+    plugins:
+      - name: rate-limiting
+        config:
+          minute: 100
+          hour: 1000
+          day: 10000
+          policy: local
+          hide_client_headers: false
+          fault_tolerant: true
+      - name: cors
+        config:
+          origins:
+            - "*"
+          methods:
+            - GET
+            - POST
+            - OPTIONS
+          headers:
+            - Content-Type
+            - Authorization
+            - X-API-Key
+            - Accept
+            - Origin
+          exposed_headers:
+            - X-Request-ID
+            - X-RateLimit-Remaining
+          credentials: true
+          max_age: 3600
+          preflight_continue: false
+      - name: prometheus
+        config:
+          status_codes: true
+          latency: true
+          bandwidth: true
+          upstream_health: true
+          http_method: true
+          http_status: true
+          consumer: true
+          custom_labels:
+            service: sarvanom-api
+            environment: production
+      - name: request-size-limiting
+        config:
+          allowed_payload_size: 1
+          size_unit: megabytes
+      - name: response-ratelimiting
+        config:
+          limits:
+            video: 
+              minute: 10
+              hour: 100
+
+  - name: sarvanom-admin
+    url: http://sarvanom-backend:8002
+    routes:
+      - name: admin-routes
+        paths:
+          - /admin
+          - /admin/users
+          - /admin/analytics
+          - /admin/config
+        strip_path: false
+        preserve_host: true
+        methods:
+          - GET
+          - POST
+          - PUT
+          - DELETE
+    plugins:
+      - name: key-auth
+        config:
+          key_names:
+            - X-API-Key
+            - Authorization
+          key_in_header: true
+          key_in_query: false
+          hide_credentials: true
+          anonymous: null
+          run_on_preflight: true
+      - name: acl
+        config:
+          allow:
+            - admin
+            - super-admin
+          hide_groups_header: true
+      - name: rate-limiting
+        config:
+          minute: 50
+          hour: 500
+          day: 5000
+          policy: local
+          fault_tolerant: true
+      - name: ip-restriction
+        config:
+          allow:
+            - 127.0.0.1
+            - 10.0.0.0/8
+            - 172.16.0.0/12
+            - 192.168.0.0/16
+
+consumers:
+  - username: admin-user
+    keyauth_credentials:
+      - key: admin-key-secure-token
+    acls:
+      - group: admin
+  - username: super-admin-user
+    keyauth_credentials:
+      - key: super-admin-key-secure-token
+    acls:
+      - group: super-admin
+
+# Global plugins
+plugins:
+  - name: request-id
+    config:
+      header_name: X-Request-ID
+      generator: uuid
+  - name: correlation-id
+    config:
+      header_name: X-Correlation-ID
+      generator: uuid
+      echo_downstream: true 

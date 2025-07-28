@@ -13,14 +13,14 @@ from .synthesis_agent import SynthesisAgent
 from .citation_agent import CitationAgent
 
 __all__ = [
-    'BaseAgent',
-    'AgentType',
-    'AgentMessage',
-    'AgentResult',
-    'QueryContext',
-    'LeadOrchestrator',
-    'RetrievalAgent',
-    'FactCheckAgent',
-    'SynthesisAgent',
-    'CitationAgent'
+    "BaseAgent",
+    "AgentType",
+    "AgentMessage",
+    "AgentResult",
+    "QueryContext",
+    "LeadOrchestrator",
+    "RetrievalAgent",
+    "FactCheckAgent",
+    "SynthesisAgent",
+    "CitationAgent",
 ]

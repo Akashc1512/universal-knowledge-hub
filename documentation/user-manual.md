@@ -439,7 +439,7 @@ A: Yes, you can cancel your subscription at any time from your billing settings.
 3. **Support Team**
    - Email: support@universal-knowledge-hub.com
    - Live chat: Available during business hours
-   - Phone: +1-XXX-XXX-XXXX
+   - Phone: Contact your assigned customer success manager
 
 ### Feedback
 
@@ -472,3 +472,20 @@ Contact us at: feedback@universal-knowledge-hub.com
 ---
 
 *Last updated: January 2024* 
+
+## Contact Information
+
+### Technical Support
+- **Email**: support@universal-knowledge-hub.com
+- **Documentation**: [Online Help Center](https://docs.universal-knowledge-hub.com)
+- **Community**: [GitHub Discussions](https://github.com/your-org/universal-knowledge-hub/discussions)
+
+### Enterprise Support
+- **Sales**: sales@universal-knowledge-hub.com
+- **Enterprise Support**: enterprise@universal-knowledge-hub.com
+- **Phone**: Contact your assigned customer success manager
+
+### Issue Reporting
+- **Bug reports**: [GitHub Issues](https://github.com/your-org/universal-knowledge-hub/issues)
+- **Feature requests**: [GitHub Discussions](https://github.com/your-org/universal-knowledge-hub/discussions)
+- **Security issues**: security@universal-knowledge-hub.com 

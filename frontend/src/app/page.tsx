@@ -1,39 +1,25 @@
 'use client'
 
 import { useState } from 'react'
+import Link from 'next/link'
 import QueryForm from '@/components/QueryForm'
 import AnswerDisplay from '@/components/AnswerDisplay'
 import FeedbackForm from '@/components/FeedbackForm'
 import { QueryResponse } from '@/types/api'
+import { api } from '@/lib/api'
 
 export default function Home() {
   const [response, setResponse] = useState<QueryResponse | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const handleQuerySubmit = async (query: string) => {
+  const handleQuery = async (query: string) => {
     setIsLoading(true)
     setError(null)
     setResponse(null)
 
     try {
-      const response = await fetch('/api/query', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          query,
-          max_tokens: 1000,
-          confidence_threshold: 0.8,
-        }),
-      })
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`)
-      }
-
-      const data = await response.json()
+      const data = await api.submitQuery(query)
       setResponse(data)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An error occurred')
@@ -43,12 +29,46 @@ export default function Home() {
   }
 
   const handleFeedback = async (type: 'helpful' | 'not-helpful', details?: string) => {
-    // TODO: Implement feedback submission to backend
-    console.log('Feedback submitted:', { type, details })
+    if (!response?.query_id) return
+
+    try {
+      await api.submitFeedback({
+        query_id: response.query_id,
+        feedback_type: type,
+        details: details || '',
+      })
+    } catch (err) {
+      console.error('Feedback submission failed:', err)
+      // Don't show error to user for feedback failures
+    }
   }
 
   return (
     <div className="max-w-4xl mx-auto">
+      {/* Navigation */}
+      <div className="mb-8">
+        <nav className="flex space-x-4">
+          <Link 
+            href="/" 
+            className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
+          >
+            New Query
+          </Link>
+          <Link 
+            href="/queries" 
+            className="px-4 py-2 border border-blue-600 text-blue-600 rounded-md hover:bg-blue-50"
+          >
+            Manage Queries
+          </Link>
+          <Link 
+            href="/dashboard" 
+            className="px-4 py-2 border border-blue-600 text-blue-600 rounded-md hover:bg-blue-50"
+          >
+            Dashboard
+          </Link>
+        </nav>
+      </div>
+
       {/* Hero Section */}
       <div className="text-center mb-12">
         <div className="mb-6">
@@ -70,7 +90,7 @@ export default function Home() {
 
       {/* Main Interface */}
       <div className="space-y-8">
-        <QueryForm onSubmit={handleQuerySubmit} isLoading={isLoading} />
+        <QueryForm onSubmit={handleQuery} isLoading={isLoading} />
         
         {error && (
           <div className="bg-red-50 border border-red-200 rounded-lg p-4">

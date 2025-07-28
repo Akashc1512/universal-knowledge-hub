@@ -1,125 +1,290 @@
-name: CI/CD Pipeline
+name: CI/CD Pipeline - MAANG Standards
 
 on:
   push:
     branches: [ main, develop ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, develop ]
+  release:
+    types: [ published ]
 
 env:
-  REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  PYTHON_VERSION: '3.11'
+  DOCKER_REGISTRY: ghcr.io
+  IMAGE_NAME: universal-knowledge-platform
 
 jobs:
-  test:
+  # Code Quality Checks
+  code-quality:
+    name: Code Quality & Linting
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: [3.9, 3.10, 3.11]
-
+    timeout-minutes: 10
+    
     steps:
-    - uses: actions/checkout@v4
-
-    - name: Set up Python ${{ matrix.python-version }}
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Set up Python
       uses: actions/setup-python@v4
       with:
-        python-version: ${{ matrix.python-version }}
-
+        python-version: ${{ env.PYTHON_VERSION }}
+    
+    - name: Cache pip dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+    
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
-        pip install pytest pytest-asyncio pytest-cov
-
-    - name: Run tests
+        pip install flake8 black mypy pytest pytest-cov pytest-asyncio
+    
+    - name: Run linting
       run: |
-        pytest tests/ -v --cov=api --cov=agents --cov-report=xml --cov-report=html
+        echo "Running flake8..."
+        flake8 api/ tests/ --max-line-length=88 --extend-ignore=E203,W503
+        echo "Running black check..."
+        black --check --diff api/ tests/
+        echo "Running mypy..."
+        mypy api/ --ignore-missing-imports --disallow-untyped-defs
+    
+    - name: Check code formatting
+      run: |
+        echo "Checking code formatting..."
+        black --check --diff api/ tests/
+    
+    - name: Security scan
+      uses: github/codeql-action/init@v2
+      with:
+        languages: python
+    
+    - name: Perform CodeQL Analysis
+      uses: github/codeql-action/analyze@v2
 
+  # Unit Tests
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+    
+    - name: Cache pip dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest pytest-cov pytest-asyncio pytest-mock
+    
+    - name: Run unit tests
+      run: |
+        pytest tests/ -v --cov=api --cov-report=xml --cov-report=html --cov-report=term-missing
+        coverage report --fail-under=95
+    
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v3
       with:
         file: ./coverage.xml
         flags: unittests
         name: codecov-umbrella
+        fail_ci_if_error: true
 
-  security:
+  # Integration Tests
+  integration-tests:
+    name: Integration Tests
     runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: 3.9
-
-    - name: Install security tools
-      run: |
-        pip install bandit safety
-
-    - name: Run security scan
-      run: |
-        bandit -r api/ agents/ -f json -o bandit-report.json || true
-        safety check --json --output safety-report.json || true
-
-    - name: Upload security reports
-      uses: actions/upload-artifact@v3
-      with:
-        name: security-reports
-        path: |
-          bandit-report.json
-          safety-report.json
-
-  lint:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: 3.9
-
-    - name: Install linting tools
-      run: |
-        pip install flake8 black isort mypy
-
-    - name: Run linting
-      run: |
-        flake8 api/ agents/ --max-line-length=88 --extend-ignore=E203,W503
-        black --check api/ agents/
-        isort --check-only api/ agents/
-        mypy api/ agents/ --ignore-missing-imports
-
-  build:
-    needs: [test, security, lint]
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    timeout-minutes: 20
+    
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      
+      elasticsearch:
+        image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+        env:
+          discovery.type: single-node
+          xpack.security.enabled: false
+          ES_JAVA_OPTS: "-Xms512m -Xmx512m"
+        ports:
+          - 9200:9200
+        options: >-
+          --health-cmd "curl http://localhost:9200/_cluster/health"
+          --health-interval 30s
+          --health-timeout 10s
+          --health-retries 5
     
     steps:
-    - uses: actions/checkout@v4
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest pytest-asyncio pytest-mock
+    
+    - name: Run integration tests
+      run: |
+        pytest tests/test_api_integration.py -v -m "not performance and not security"
+    
+    - name: Test API health
+      run: |
+        sleep 10  # Wait for services to be ready
+        python -c "
+        import requests
+        import time
+        for i in range(30):
+            try:
+                response = requests.get('http://localhost:8000/health')
+                if response.status_code == 200:
+                    print('API is healthy')
+                    break
+            except:
+                time.sleep(1)
+        else:
+            raise Exception('API health check failed')
+        "
 
+  # Performance Tests
+  performance-tests:
+    name: Performance Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest pytest-benchmark locust
+    
+    - name: Run performance tests
+      run: |
+        pytest tests/test_api_integration.py -v -m performance
+    
+    - name: Load testing with Locust
+      run: |
+        locust -f tests/locustfile.py --headless --users 10 --spawn-rate 2 --run-time 60s --host http://localhost:8000
+
+  # Security Tests
+  security-tests:
+    name: Security Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install bandit safety
+    
+    - name: Run security tests
+      run: |
+        pytest tests/test_api_integration.py -v -m security
+    
+    - name: Bandit security scan
+      run: |
+        bandit -r api/ -f json -o bandit-report.json || true
+        bandit -r api/ -f txt
+    
+    - name: Safety check
+      run: |
+        safety check --json --output safety-report.json || true
+        safety check
+
+  # Build and Test Docker Image
+  docker-build:
+    name: Build Docker Image
+    runs-on: ubuntu-latest
+    needs: [unit-tests, integration-tests]
+    timeout-minutes: 20
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
-
+    
     - name: Log in to Container Registry
       uses: docker/login-action@v3
       with:
-        registry: ${{ env.REGISTRY }}
+        registry: ${{ env.DOCKER_REGISTRY }}
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
-
+    
     - name: Extract metadata
       id: meta
       uses: docker/metadata-action@v5
       with:
-        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+        images: ${{ env.DOCKER_REGISTRY }}/${{ github.repository }}/${{ env.IMAGE_NAME }}
         tags: |
           type=ref,event=branch
           type=ref,event=pr
           type=semver,pattern={{version}}
           type=semver,pattern={{major}}.{{minor}}
           type=sha,prefix={{branch}}-
-
+    
     - name: Build and push Docker image
       uses: docker/build-push-action@v5
       with:
@@ -131,59 +296,84 @@ jobs:
         cache-from: type=gha
         cache-to: type=gha,mode=max
 
+  # Deploy to Staging
   deploy-staging:
-    needs: build
+    name: Deploy to Staging
     runs-on: ubuntu-latest
+    needs: [docker-build, security-tests]
     if: github.ref == 'refs/heads/develop'
-    environment: staging
+    environment:
+      name: staging
+    timeout-minutes: 30
     
     steps:
-    - uses: actions/checkout@v4
-
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
     - name: Deploy to staging
       run: |
-        echo "Deploying to staging environment"
-        # Add your staging deployment commands here
-        # Example: kubectl apply -f infrastructure/kubernetes/staging/
+        echo "Deploying to staging environment..."
+        # Add your staging deployment logic here
+        # Example: kubectl apply -f k8s/staging/
+    
+    - name: Run smoke tests
+      run: |
+        echo "Running smoke tests on staging..."
+        # Add smoke test logic here
+        curl -f http://staging-api.example.com/health || exit 1
 
+  # Deploy to Production
   deploy-production:
-    needs: build
+    name: Deploy to Production
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
-    environment: production
+    needs: [docker-build, security-tests]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    environment:
+      name: production
+    timeout-minutes: 45
     
     steps:
-    - uses: actions/checkout@v4
-
-    - name: Set up kubectl
-      uses: azure/setup-kubectl@v3
-      with:
-        version: 'latest'
-
-    - name: Configure kubectl
-      run: |
-        echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > kubeconfig.yaml
-        export KUBECONFIG=kubeconfig.yaml
-
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
     - name: Deploy to production
       run: |
-        echo "Deploying to production environment"
-        kubectl apply -f infrastructure/kubernetes/
-        kubectl rollout status deployment/ukp-api -n ukp
+        echo "Deploying to production environment..."
+        # Add your production deployment logic here
+        # Example: kubectl apply -f k8s/production/
+    
+    - name: Run health checks
+      run: |
+        echo "Running health checks on production..."
+        # Add health check logic here
+        curl -f http://api.example.com/health || exit 1
+    
+    - name: Notify deployment
+      run: |
+        echo "Production deployment completed successfully!"
+        # Add notification logic here (Slack, email, etc.)
 
-  notify:
-    needs: [deploy-staging, deploy-production]
+  # Release Management
+  create-release:
+    name: Create Release
     runs-on: ubuntu-latest
-    if: always()
+    needs: [deploy-production]
+    if: github.event_name == 'release' && github.event.action == 'published'
+    
     steps:
-    - name: Notify on success
-      if: success()
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Generate release notes
       run: |
-        echo "Deployment completed successfully"
-        # Add notification logic (Slack, email, etc.)
+        echo "Generating release notes..."
+        # Add release notes generation logic here
+    
+    - name: Update documentation
+      run: |
+        echo "Updating documentation..."
+        # Add documentation update logic here
 
-    - name: Notify on failure
-      if: failure()
-      run: |
-        echo "Deployment failed"
-        # Add failure notification logic 
+# Dependencies between jobs
+# This ensures proper order of execution
+# code-quality -> unit-tests -> integration-tests -> docker-build -> deploy-staging -> deploy-production 

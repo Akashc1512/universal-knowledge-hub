@@ -1,0 +1,92 @@
+groups:
+  - name: sarvanom-recording-rules
+    interval: 30s
+    rules:
+      # API Request Rate
+      - record: sarvanom:api_request_rate
+        expr: rate(http_requests_total{job="sarvanom-backend"}[5m])
+
+      # API Error Rate
+      - record: sarvanom:api_error_rate
+        expr: rate(http_requests_total{job="sarvanom-backend",status=~"4..|5.."}[5m]) / rate(http_requests_total{job="sarvanom-backend"}[5m])
+
+      # API Latency Percentiles
+      - record: sarvanom:api_latency_p50
+        expr: histogram_quantile(0.50, rate(http_request_duration_seconds_bucket{job="sarvanom-backend"}[5m]))
+
+      - record: sarvanom:api_latency_p95
+        expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket{job="sarvanom-backend"}[5m]))
+
+      - record: sarvanom:api_latency_p99
+        expr: histogram_quantile(0.99, rate(http_request_duration_seconds_bucket{job="sarvanom-backend"}[5m]))
+
+      # Query Processing Metrics
+      - record: sarvanom:query_success_rate
+        expr: rate(query_total{status="success"}[5m]) / rate(query_total[5m])
+
+      - record: sarvanom:query_rate_by_type
+        expr: rate(query_total[5m])
+
+      - record: sarvanom:agent_processing_time_p95
+        expr: histogram_quantile(0.95, rate(agent_processing_duration_seconds_bucket[5m]))
+
+      # Resource Utilization
+      - record: sarvanom:memory_usage_percentage
+        expr: process_resident_memory_bytes{job="sarvanom-backend"} / node_memory_MemTotal_bytes * 100
+
+      - record: sarvanom:cpu_usage_percentage
+        expr: rate(process_cpu_seconds_total{job="sarvanom-backend"}[5m]) * 100
+
+      # Cache Performance
+      - record: sarvanom:cache_hit_rate
+        expr: rate(cache_hits_total[5m]) / (rate(cache_hits_total[5m]) + rate(cache_misses_total[5m]))
+
+      - record: sarvanom:cache_operations_rate
+        expr: rate(cache_operations_total[5m])
+
+  - name: kong-recording-rules
+    interval: 30s
+    rules:
+      # Kong Request Metrics
+      - record: kong:request_rate
+        expr: rate(kong_http_status[5m])
+
+      - record: kong:error_rate
+        expr: rate(kong_http_status{code=~"4..|5.."}[5m]) / rate(kong_http_status[5m])
+
+      - record: kong:latency_p95
+        expr: histogram_quantile(0.95, rate(kong_request_latency_ms_bucket[5m]))
+
+      # Kong Bandwidth
+      - record: kong:bandwidth_in
+        expr: rate(kong_bandwidth_bytes{type="ingress"}[5m])
+
+      - record: kong:bandwidth_out
+        expr: rate(kong_bandwidth_bytes{type="egress"}[5m])
+
+  - name: database-recording-rules
+    interval: 30s
+    rules:
+      # Redis Metrics
+      - record: redis:memory_usage_percentage
+        expr: redis_memory_used_bytes / redis_memory_max_bytes * 100
+
+      - record: redis:operations_rate
+        expr: rate(redis_commands_processed_total[5m])
+
+      - record: redis:hit_rate
+        expr: rate(redis_keyspace_hits_total[5m]) / (rate(redis_keyspace_hits_total[5m]) + rate(redis_keyspace_misses_total[5m]))
+
+      # Elasticsearch Metrics
+      - record: elasticsearch:query_rate
+        expr: rate(elasticsearch_indices_search_query_total[5m])
+
+      - record: elasticsearch:index_rate
+        expr: rate(elasticsearch_indices_indexing_index_total[5m])
+
+      # Vector Database Metrics
+      - record: qdrant:search_rate
+        expr: rate(qdrant_search_requests_total[5m])
+
+      - record: qdrant:search_latency_p95
+        expr: histogram_quantile(0.95, rate(qdrant_search_duration_seconds_bucket[5m])) 

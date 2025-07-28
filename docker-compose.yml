@@ -2,13 +2,17 @@ version: '3.8'
 
 services:
   sarvanom-backend:
-    build: .
+    build: 
+      context: .
+      dockerfile: Dockerfile
     container_name: sarvanom-backend
     ports:
       - "8002:8002"
     environment:
       - UKP_HOST=0.0.0.0
       - UKP_PORT=8002
+      - UKP_WORKERS=4
+      - UKP_LOG_LEVEL=info
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - VECTOR_DB_URL=${VECTOR_DB_URL}
@@ -17,28 +21,59 @@ services:
       - API_KEY_SECRET=${API_KEY_SECRET}
       - RATE_LIMIT_PER_MINUTE=60
       - THREAT_DETECTION_ENABLED=true
+      - SECURITY_SCANNING_ENABLED=true
+      - ANOMALY_DETECTION_ENABLED=true
     volumes:
       - ./logs:/app/logs
+      - ./data:/app/data
+      - ./cache:/app/cache
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
       interval: 30s
       timeout: 10s
-      retries: 3
-      start_period: 40s
-
-  sarvanom-frontend:
-    build: ./frontend
-    container_name: sarvanom-frontend
-    ports:
-      - "3000:3000"
-    environment:
-      - NEXT_PUBLIC_API_BASE_URL=http://localhost:8002
+      retries: 5
+      start_period: 60s
+    networks:
+      - sarvanom-network
     depends_on:
-      - sarvanom-backend
-    restart: unless-stopped
+      - redis
+      - elasticsearch
+      - qdrant
 
-  # Optional: Redis for caching
+  # Vector Database (Qdrant)
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: sarvanom-qdrant
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    environment:
+      - QDRANT__SERVICE__HTTP_PORT=6333
+      - QDRANT__SERVICE__GRPC_PORT=6334
+    restart: unless-stopped
+    networks:
+      - sarvanom-network
+
+  # Elasticsearch for search
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+    container_name: sarvanom-elasticsearch
+    ports:
+      - "9200:9200"
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+    restart: unless-stopped
+    networks:
+      - sarvanom-network
+
+  # Redis for caching
   redis:
     image: redis:7-alpine
     container_name: sarvanom-redis
@@ -47,9 +82,11 @@ services:
     volumes:
       - redis_data:/data
     restart: unless-stopped
-    command: redis-server --appendonly yes
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-}
+    networks:
+      - sarvanom-network
 
-  # Optional: Prometheus for monitoring
+  # Prometheus for monitoring
   prometheus:
     image: prom/prometheus:latest
     container_name: sarvanom-prometheus
@@ -66,8 +103,10 @@ services:
       - '--storage.tsdb.retention.time=200h'
       - '--web.enable-lifecycle'
     restart: unless-stopped
+    networks:
+      - sarvanom-network
 
-  # Optional: Grafana for dashboards
+  # Grafana for dashboards
   grafana:
     image: grafana/grafana:latest
     container_name: sarvanom-grafana
@@ -75,6 +114,7 @@ services:
       - "3001:3000"
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_INSTALL_PLUGINS=grafana-clock-panel,grafana-simple-json-datasource
     volumes:
       - grafana_data:/var/lib/grafana
       - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards
@@ -82,12 +122,49 @@ services:
     restart: unless-stopped
     depends_on:
       - prometheus
+    networks:
+      - sarvanom-network
+
+  # Kong API Gateway
+  kong:
+    image: kong:3.4
+    container_name: sarvanom-kong
+    ports:
+      - "8000:8000"
+      - "8443:8443"
+      - "8001:8001"
+      - "8444:8444"
+    environment:
+      - KONG_DATABASE=off
+      - KONG_PROXY_ACCESS_LOG=/dev/stdout
+      - KONG_ADMIN_ACCESS_LOG=/dev/stdout
+      - KONG_PROXY_ERROR_LOG=/dev/stderr
+      - KONG_ADMIN_ERROR_LOG=/dev/stderr
+      - KONG_ADMIN_LISTEN=0.0.0.0:8001
+      - KONG_PROXY_LISTEN=0.0.0.0:8000
+    volumes:
+      - ./monitoring/kong.yml:/etc/kong/kong.yml
+    restart: unless-stopped
+    networks:
+      - sarvanom-network
+    depends_on:
+      - sarvanom-backend
 
 volumes:
   redis_data:
+    driver: local
   prometheus_data:
+    driver: local
   grafana_data:
+    driver: local
+  elasticsearch_data:
+    driver: local
+  qdrant_data:
+    driver: local
 
 networks:
-  default:
-    name: sarvanom-network 
+  sarvanom-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16 
