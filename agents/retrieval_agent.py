@@ -951,51 +951,273 @@ Source: {doc.source}
     # TODO: Implement LLM integration methods
     async def _llm_rerank(self, prompt: str, documents: List[Document]) -> List[Document]:
         """
-        Use LLM to rerank documents.
+        Use LLM to rerank documents based on relevance to query.
 
-        TODO:
-        - Implement actual LLM API call
-        - Parse LLM response
-        - Handle errors gracefully
-        """
-        # Placeholder - return documents as-is
-        return documents
+        Args:
+            prompt: The original query
+            documents: List of documents to rerank
 
-    async def _llm_expand_query(self, prompt: str) -> List[str]:
+        Returns:
+            Reranked list of documents
         """
-        Use LLM to expand query.
+        try:
+            if not documents:
+                return documents
 
-        TODO:
-        - Implement actual LLM API call
-        - Parse expanded queries
-        - Validate expansions
-        """
-        # Placeholder
-        return []
+            # Format documents for LLM
+            doc_texts = []
+            for i, doc in enumerate(documents):
+                doc_texts.append(f"Document {i+1}:\n{doc.content[:500]}...\nScore: {doc.score}\nSource: {doc.source}\n")
 
-    async def _llm_synthesize_facts(self, prompt: str) -> Dict[str, Any]:
-        """
-        Use LLM to synthesize facts from knowledge graph.
+            # Create LLM prompt for reranking
+            llm_prompt = f"""
+            Given the following query: "{prompt}"
+            
+            Please rerank these documents by relevance to the query. 
+            Return only the document numbers in order of relevance (most relevant first).
+            
+            Documents:
+            {chr(10).join(doc_texts)}
+            
+            Return only the document numbers separated by commas, e.g., "3,1,2,4"
+            """
 
-        TODO:
-        - Implement actual LLM API call
-        - Structure synthesized facts
-        - Add confidence scores
-        """
-        # Placeholder
-        return {}
+            # Call LLM API
+            try:
+                from api.llm_client import LLMClient
+                llm_client = LLMClient()
+                response = await llm_client.generate_text(llm_prompt, max_tokens=100)
+                
+                # Parse response to get reranked order
+                if response and ',' in response:
+                    order_str = response.strip()
+                    order_indices = [int(x.strip()) - 1 for x in order_str.split(',') if x.strip().isdigit()]
+                    
+                    # Apply reranking
+                    reranked_docs = []
+                    for idx in order_indices:
+                        if 0 <= idx < len(documents):
+                            reranked_docs.append(documents[idx])
+                    
+                    # Add any remaining documents
+                    used_indices = set(order_indices)
+                    for i, doc in enumerate(documents):
+                        if i not in used_indices:
+                            reranked_docs.append(doc)
+                    
+                    logger.info(f"LLM reranked {len(documents)} documents")
+                    return reranked_docs
+                else:
+                    logger.warning("LLM reranking failed, returning original order")
+                    return documents
+                    
+            except Exception as e:
+                logger.error(f"LLM reranking error: {e}")
+                return documents
+                
+        except Exception as e:
+            logger.error(f"Document reranking failed: {e}")
+            return documents
 
-    async def _llm_fuse_results(self, prompt: str) -> List[Tuple[str, float]]:
+    async def _llm_expand_query(self, query: str) -> List[str]:
         """
-        Use LLM to fuse results from multiple sources.
+        Use LLM to expand query with related terms and synonyms.
 
-        TODO:
-        - Implement actual LLM API call
-        - Parse ranking decisions
-        - Extract rationale
+        Args:
+            query: Original query
+
+        Returns:
+            List of expanded queries
         """
-        # Placeholder
-        return []
+        try:
+            llm_prompt = f"""
+            Given the query: "{query}"
+            
+            Generate 3-5 related queries that would help find relevant information.
+            Consider synonyms, related concepts, and different ways to express the same idea.
+            
+            Return only the expanded queries, one per line, without numbering.
+            """
+
+            try:
+                from api.llm_client import LLMClient
+                llm_client = LLMClient()
+                response = await llm_client.generate_text(llm_prompt, max_tokens=200)
+                
+                if response:
+                    # Parse response into individual queries
+                    expanded_queries = [line.strip() for line in response.split('\n') if line.strip()]
+                    # Add original query
+                    expanded_queries.insert(0, query)
+                    # Remove duplicates while preserving order
+                    seen = set()
+                    unique_queries = []
+                    for q in expanded_queries:
+                        if q not in seen:
+                            seen.add(q)
+                            unique_queries.append(q)
+                    
+                    logger.info(f"LLM expanded query into {len(unique_queries)} variations")
+                    return unique_queries
+                else:
+                    return [query]
+                    
+            except Exception as e:
+                logger.error(f"LLM query expansion error: {e}")
+                return [query]
+                
+        except Exception as e:
+            logger.error(f"Query expansion failed: {e}")
+            return [query]
+
+    async def _llm_synthesize_facts(self, query: str, knowledge_triples: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        Use LLM to synthesize facts from knowledge graph triples.
+
+        Args:
+            query: Original query
+            knowledge_triples: List of knowledge graph triples
+
+        Returns:
+            Dictionary with synthesized facts and confidence scores
+        """
+        try:
+            if not knowledge_triples:
+                return {"facts": [], "confidence": 0.0}
+
+            # Format triples for LLM
+            triple_texts = []
+            for i, triple in enumerate(knowledge_triples[:10]):  # Limit to first 10
+                triple_texts.append(f"Fact {i+1}: {triple.get('subject', '')} {triple.get('predicate', '')} {triple.get('object', '')}")
+
+            llm_prompt = f"""
+            Given the query: "{query}"
+            
+            Analyze these knowledge graph facts and synthesize the most relevant information:
+            {chr(10).join(triple_texts)}
+            
+            Return a JSON object with:
+            - "facts": array of synthesized fact strings
+            - "confidence": overall confidence score (0.0-1.0)
+            - "sources": array of source triple indices used
+            """
+
+            try:
+                from api.llm_client import LLMClient
+                llm_client = LLMClient()
+                response = await llm_client.generate_text(llm_prompt, max_tokens=300)
+                
+                if response:
+                    # Try to parse JSON response
+                    import json
+                    try:
+                        result = json.loads(response)
+                        if isinstance(result, dict):
+                            return {
+                                "facts": result.get("facts", []),
+                                "confidence": result.get("confidence", 0.5),
+                                "sources": result.get("sources", [])
+                            }
+                    except json.JSONDecodeError:
+                        # Fallback: extract facts from text
+                        facts = [line.strip() for line in response.split('\n') if line.strip() and not line.startswith('{') and not line.startswith('}')]
+                        return {
+                            "facts": facts,
+                            "confidence": 0.6,
+                            "sources": list(range(len(knowledge_triples)))
+                        }
+                else:
+                    return {"facts": [], "confidence": 0.0, "sources": []}
+                    
+            except Exception as e:
+                logger.error(f"LLM fact synthesis error: {e}")
+                return {"facts": [], "confidence": 0.0, "sources": []}
+                
+        except Exception as e:
+            logger.error(f"Fact synthesis failed: {e}")
+            return {"facts": [], "confidence": 0.0, "sources": []}
+
+    async def _llm_fuse_results(self, query: str, results: List[SearchResult]) -> List[Tuple[str, float]]:
+        """
+        Use LLM to fuse results from multiple sources and rank them.
+
+        Args:
+            query: Original query
+            results: List of search results from different sources
+
+        Returns:
+            List of (content, score) tuples ranked by relevance
+        """
+        try:
+            if not results:
+                return []
+
+            # Collect all documents from different sources
+            all_docs = []
+            for i, result in enumerate(results):
+                for j, doc in enumerate(result.documents):
+                    all_docs.append({
+                        "content": doc.content[:300] + "...",
+                        "score": doc.score,
+                        "source": doc.source,
+                        "id": f"{i}_{j}"
+                    })
+
+            if not all_docs:
+                return []
+
+            # Format for LLM
+            doc_texts = []
+            for doc in all_docs[:20]:  # Limit to first 20
+                doc_texts.append(f"Doc {doc['id']}: {doc['content']} (Score: {doc['score']}, Source: {doc['source']})")
+
+            llm_prompt = f"""
+            Given the query: "{query}"
+            
+            Rank these documents by relevance to the query:
+            {chr(10).join(doc_texts)}
+            
+            Return only the document IDs in order of relevance (most relevant first), separated by commas.
+            Example: "0_1,1_3,0_2"
+            """
+
+            try:
+                from api.llm_client import LLMClient
+                llm_client = LLMClient()
+                response = await llm_client.generate_text(llm_prompt, max_tokens=150)
+                
+                if response and ',' in response:
+                    # Parse ranked order
+                    order_str = response.strip()
+                    ranked_ids = [x.strip() for x in order_str.split(',')]
+                    
+                    # Create ranked results
+                    ranked_results = []
+                    for doc_id in ranked_ids:
+                        for doc in all_docs:
+                            if doc['id'] == doc_id:
+                                ranked_results.append((doc['content'], doc['score']))
+                                break
+                    
+                    # Add any remaining documents
+                    used_ids = set(ranked_ids)
+                    for doc in all_docs:
+                        if doc['id'] not in used_ids:
+                            ranked_results.append((doc['content'], doc['score']))
+                    
+                    logger.info(f"LLM fused {len(ranked_results)} documents from {len(results)} sources")
+                    return ranked_results
+                else:
+                    # Fallback: return documents with original scores
+                    return [(doc['content'], doc['score']) for doc in all_docs]
+                    
+            except Exception as e:
+                logger.error(f"LLM result fusion error: {e}")
+                return [(doc['content'], doc['score']) for doc in all_docs]
+                
+        except Exception as e:
+            logger.error(f"Result fusion failed: {e}")
+            return []
 
     async def process_task(self, task: Dict[str, Any], context: QueryContext) -> AgentResult:
         """Process a retrieval task with token optimization."""

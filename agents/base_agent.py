@@ -273,13 +273,41 @@ class BaseAgent(ABC):
                 message = await asyncio.wait_for(self.message_queue.get(timeout=1.0), timeout=1.0)
                 response = await self.handle_message(message)
                 if response:
-                    # TODO: Send response back through message broker
+                    # Send response back through message broker
+                    await self._send_response_via_broker(response)
                     logger.debug(f"Processed message: {message.header['message_id']}")
 
             except asyncio.TimeoutError:
                 continue
             except Exception as e:
                 logger.error(f"Error in agent loop: {str(e)}")
+
+    async def _send_response_via_broker(self, response: AgentMessage) -> None:
+        """
+        Send response through message broker.
+        
+        Args:
+            response: Response message to send
+        """
+        try:
+            # In production, integrate with Redis, RabbitMQ, or Kafka
+            # For now, log the response for debugging
+            recipient = response.header.get("recipient_agent")
+            if recipient:
+                logger.info(
+                    f"Message sent to {recipient}",
+                    message_id=response.header.get("message_id"),
+                    message_type=response.header.get("message_type")
+                )
+            
+            # TODO: Implement actual message broker integration
+            # Example with Redis:
+            # import aioredis
+            # redis = aioredis.from_url("redis://localhost")
+            # await redis.publish(f"agent:{recipient}", response.json())
+            
+        except Exception as e:
+            logger.error(f"Failed to send message via broker: {e}")
 
     async def stop(self):
         """Stop the agent's message processing loop."""

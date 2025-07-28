@@ -719,7 +719,14 @@ async def submit_feedback(
             "request_id": request_id,
         }
         
-        # TODO: Store in database/cache for analytics
+        # Store in database/cache for analytics
+        try:
+            from api.analytics import store_feedback
+            await store_feedback(feedback_data)
+            logger.info(f"Feedback stored in analytics: {feedback_id}")
+        except Exception as e:
+            logger.warning(f"Failed to store feedback in analytics: {e}")
+        
         logger.info(f"Feedback stored: {feedback_data}")
         
         return FeedbackResponse(

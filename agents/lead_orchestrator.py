@@ -721,10 +721,11 @@ class SemanticCacheManager:
         self.max_cache_size = max_cache_size
         self._lock = asyncio.Lock()
         self.access_times = {}  # Track access times for LRU eviction
+        self.hit_counts = {} # Track hit counts for hit rate calculation
 
     async def get_cached_response(self, query: str) -> Optional[Dict[str, Any]]:
         """
-        Get cached response using embedding-based similarity.
+        Get cached response for query using semantic similarity.
 
         Args:
             query: Query to search for
@@ -733,21 +734,81 @@ class SemanticCacheManager:
             Cached response if similar query found, None otherwise
         """
         async with self._lock:
-            # Simple exact match for now (TODO: implement embedding-based similarity)
+            # Check exact match first
             if query in self.cache:
                 self.access_times[query] = time.time()
+                self.hit_counts[query] = self.hit_counts.get(query, 0) + 1
                 return self.cache[query]
 
-            # Check for similar queries (basic word overlap for now)
-            query_words = set(query.lower().split())
-            for cached_query in self.cache.keys():
-                cached_words = set(cached_query.lower().split())
-                overlap = len(query_words & cached_words) / len(query_words | cached_words)
-                if overlap > 0.7:  # 70% word overlap threshold
-                    self.access_times[cached_query] = time.time()
-                    return self.cache[cached_query]
+            # Check for similar queries using embedding-based similarity
+            try:
+                from api.llm_client import LLMClient
+                llm_client = LLMClient()
+                query_embedding = await llm_client.get_embedding(query)
+                
+                best_match = None
+                best_similarity = 0.0
+                
+                for cached_query in self.cache.keys():
+                    cached_embedding = await llm_client.get_embedding(cached_query)
+                    similarity = self._calculate_cosine_similarity(query_embedding, cached_embedding)
+                    
+                    if similarity > self.similarity_threshold and similarity > best_similarity:
+                        best_similarity = similarity
+                        best_match = cached_query
+                
+                if best_match:
+                    self.access_times[best_match] = time.time()
+                    self.hit_counts[best_match] = self.hit_counts.get(best_match, 0) + 1
+                    logger.info(f"Semantic cache hit: '{query}' matched '{best_match}' (similarity: {best_similarity:.3f})")
+                    return self.cache[best_match]
+                    
+            except Exception as e:
+                logger.warning(f"Embedding-based similarity failed, falling back to word overlap: {e}")
+                # Fallback to word overlap method
+                query_words = set(query.lower().split())
+                for cached_query in self.cache.keys():
+                    cached_words = set(cached_query.lower().split())
+                    overlap = len(query_words & cached_words) / len(query_words | cached_words)
+                    if overlap > 0.7:  # 70% word overlap threshold
+                        self.access_times[cached_query] = time.time()
+                        self.hit_counts[cached_query] = self.hit_counts.get(cached_query, 0) + 1
+                        return self.cache[cached_query]
 
             return None
+
+    def _calculate_cosine_similarity(self, embedding1: List[float], embedding2: List[float]) -> float:
+        """
+        Calculate cosine similarity between two embeddings.
+        
+        Args:
+            embedding1: First embedding vector
+            embedding2: Second embedding vector
+            
+        Returns:
+            Cosine similarity score (0.0 to 1.0)
+        """
+        try:
+            import numpy as np
+            
+            # Convert to numpy arrays
+            vec1 = np.array(embedding1)
+            vec2 = np.array(embedding2)
+            
+            # Calculate cosine similarity
+            dot_product = np.dot(vec1, vec2)
+            norm1 = np.linalg.norm(vec1)
+            norm2 = np.linalg.norm(vec2)
+            
+            if norm1 == 0 or norm2 == 0:
+                return 0.0
+                
+            similarity = dot_product / (norm1 * norm2)
+            return float(similarity)
+            
+        except Exception as e:
+            logger.error(f"Cosine similarity calculation failed: {e}")
+            return 0.0
 
     async def cache_response(self, query: str, response: Dict[str, Any]):
         """
@@ -763,19 +824,29 @@ class SemanticCacheManager:
                 oldest_query = min(self.access_times.keys(), key=lambda k: self.access_times[k])
                 del self.cache[oldest_query]
                 del self.access_times[oldest_query]
+                if oldest_query in self.hit_counts:
+                    del self.hit_counts[oldest_query]
 
             self.cache[query] = response
             self.access_times[query] = time.time()
+            self.hit_counts[query] = 0  # Initialize hit count
 
     async def get_cache_stats(self) -> Dict[str, Any]:
-        """Get cache statistics."""
+        """Get cache statistics with hit rate tracking."""
         async with self._lock:
+            total_hits = sum(self.hit_counts.values())
+            total_requests = len(self.access_times) + total_hits  # Rough estimate
+            hit_rate = total_hits / max(total_requests, 1)
+            
             return {
                 "size": len(self.cache),
                 "max_size": self.max_cache_size,
-                "hit_rate": 0.0,  # TODO: implement hit rate tracking
+                "hit_rate": hit_rate,
+                "total_hits": total_hits,
+                "total_requests": total_requests,
                 "oldest_entry": min(self.access_times.values()) if self.access_times else None,
                 "newest_entry": max(self.access_times.values()) if self.access_times else None,
+                "most_hit_query": max(self.hit_counts.items(), key=lambda x: x[1]) if self.hit_counts else None,
             }
 
 

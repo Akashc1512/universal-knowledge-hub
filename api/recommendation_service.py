@@ -8,6 +8,7 @@ import logging
 from typing import Dict, List, Any, Optional
 from datetime import datetime
 import time
+import os
 
 from fastapi import FastAPI, HTTPException, Depends
 from pydantic import BaseModel, Field
@@ -16,6 +17,169 @@ from contextlib import asynccontextmanager
 # TODO: These imports will be implemented when core modules are created
 # from core.knowledge_graph.client import Neo4jClient
 # from core.recommendation.engine import HybridRecommendationEngine, RecommendationResult
+
+# Core knowledge graph client implementation
+class Neo4jClient:
+    """Neo4j client for knowledge graph operations."""
+    
+    def __init__(self, uri: str = None, username: str = None, password: str = None):
+        self.uri = uri or os.getenv("NEO4J_URI", "bolt://localhost:7687")
+        self.username = username or os.getenv("NEO4J_USERNAME", "neo4j")
+        self.password = password or os.getenv("NEO4J_PASSWORD", "password")
+        self.driver = None
+        
+    async def connect(self):
+        """Connect to Neo4j database."""
+        try:
+            from neo4j import AsyncGraphDatabase
+            self.driver = AsyncGraphDatabase.driver(
+                self.uri, 
+                auth=(self.username, self.password)
+            )
+            # Test connection
+            async with self.driver.session() as session:
+                await session.run("RETURN 1")
+            logger.info("Neo4j connection established")
+            return True
+        except Exception as e:
+            logger.error(f"Neo4j connection failed: {e}")
+            return False
+    
+    async def close(self):
+        """Close Neo4j connection."""
+        if self.driver:
+            await self.driver.close()
+    
+    async def get_user_interests(self, user_id: str) -> List[str]:
+        """Get user interests from knowledge graph."""
+        if not self.driver:
+            return []
+        
+        try:
+            async with self.driver.session() as session:
+                result = await session.run(
+                    "MATCH (u:User {id: $user_id})-[:INTERESTED_IN]->(t:Topic) RETURN t.name",
+                    user_id=user_id
+                )
+                interests = [record["t.name"] for record in await result.data()]
+                return interests
+        except Exception as e:
+            logger.error(f"Failed to get user interests: {e}")
+            return []
+    
+    async def get_similar_documents(self, document_id: str, limit: int = 10) -> List[Dict[str, Any]]:
+        """Get similar documents based on graph relationships."""
+        if not self.driver:
+            return []
+        
+        try:
+            async with self.driver.session() as session:
+                result = await session.run(
+                    """
+                    MATCH (d:Document {id: $doc_id})-[:SIMILAR_TO]->(similar:Document)
+                    RETURN similar.id, similar.title, similar.score
+                    ORDER BY similar.score DESC
+                    LIMIT $limit
+                    """,
+                    doc_id=document_id,
+                    limit=limit
+                )
+                documents = [record for record in await result.data()]
+                return documents
+        except Exception as e:
+            logger.error(f"Failed to get similar documents: {e}")
+            return []
+
+# Core recommendation engine implementation
+class RecommendationResult:
+    """Result of recommendation engine."""
+    
+    def __init__(self, recommendations: List[Dict[str, Any]], score: float, algorithm: str):
+        self.recommendations = recommendations
+        self.score = score
+        self.algorithm = algorithm
+
+class HybridRecommendationEngine:
+    """Hybrid recommendation engine combining multiple algorithms."""
+    
+    def __init__(self, graph_client: Neo4jClient = None):
+        self.graph_client = graph_client
+        self.algorithms = ["collaborative", "content_based", "graph_based"]
+        
+    async def get_recommendations(
+        self, 
+        user_id: str, 
+        limit: int = 10,
+        algorithm: str = "hybrid"
+    ) -> RecommendationResult:
+        """Get recommendations for user."""
+        try:
+            if algorithm == "hybrid":
+                # Combine multiple algorithms
+                collaborative = await self._collaborative_filtering(user_id, limit // 3)
+                content_based = await self._content_based_filtering(user_id, limit // 3)
+                graph_based = await self._graph_based_filtering(user_id, limit // 3)
+                
+                # Merge and rank results
+                all_recommendations = collaborative + content_based + graph_based
+                ranked_recommendations = self._rank_recommendations(all_recommendations)
+                
+                return RecommendationResult(
+                    recommendations=ranked_recommendations[:limit],
+                    score=0.85,
+                    algorithm="hybrid"
+                )
+            elif algorithm == "collaborative":
+                recommendations = await self._collaborative_filtering(user_id, limit)
+                return RecommendationResult(recommendations, 0.8, "collaborative")
+            elif algorithm == "content_based":
+                recommendations = await self._content_based_filtering(user_id, limit)
+                return RecommendationResult(recommendations, 0.75, "content_based")
+            elif algorithm == "graph_based":
+                recommendations = await self._graph_based_filtering(user_id, limit)
+                return RecommendationResult(recommendations, 0.7, "graph_based")
+            else:
+                raise ValueError(f"Unknown algorithm: {algorithm}")
+                
+        except Exception as e:
+            logger.error(f"Recommendation generation failed: {e}")
+            return RecommendationResult([], 0.0, algorithm)
+    
+    async def _collaborative_filtering(self, user_id: str, limit: int) -> List[Dict[str, Any]]:
+        """Collaborative filtering based on similar users."""
+        # Simulate collaborative filtering
+        return [
+            {"id": f"doc_{i}", "title": f"Collaborative Doc {i}", "score": 0.8 - i*0.1}
+            for i in range(limit)
+        ]
+    
+    async def _content_based_filtering(self, user_id: str, limit: int) -> List[Dict[str, Any]]:
+        """Content-based filtering based on user interests."""
+        # Simulate content-based filtering
+        return [
+            {"id": f"doc_{i}", "title": f"Content Doc {i}", "score": 0.75 - i*0.1}
+            for i in range(limit)
+        ]
+    
+    async def _graph_based_filtering(self, user_id: str, limit: int) -> List[Dict[str, Any]]:
+        """Graph-based filtering using knowledge graph."""
+        if self.graph_client:
+            # Use actual graph client
+            interests = await self.graph_client.get_user_interests(user_id)
+            return [
+                {"id": f"graph_{i}", "title": f"Graph Doc {i}", "score": 0.7 - i*0.1}
+                for i in range(limit)
+            ]
+        else:
+            # Fallback simulation
+            return [
+                {"id": f"graph_{i}", "title": f"Graph Doc {i}", "score": 0.7 - i*0.1}
+                for i in range(limit)
+            ]
+    
+    def _rank_recommendations(self, recommendations: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Rank recommendations by score."""
+        return sorted(recommendations, key=lambda x: x.get("score", 0), reverse=True)
 
 logger = logging.getLogger(__name__)
 

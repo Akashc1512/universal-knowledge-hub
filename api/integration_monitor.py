@@ -137,42 +137,164 @@ class IntegrationMonitor:
 
     async def _check_vector_db(self) -> str:
         """Check vector database connectivity."""
-        # TODO: Implement actual vector DB connectivity check
-        # For now, return healthy if configured
-        if os.getenv("VECTOR_DB_HOST") or os.getenv("PINECONE_API_KEY") or os.getenv("QDRANT_URL"):
-            return "healthy"
-        return "not_configured"
+        try:
+            # Check Pinecone
+            if os.getenv("PINECONE_API_KEY"):
+                import pinecone
+                pinecone.init(
+                    api_key=os.getenv("PINECONE_API_KEY"),
+                    environment=os.getenv("PINECONE_ENVIRONMENT", "us-west1-gcp")
+                )
+                # Test connection by listing indexes
+                indexes = pinecone.list_indexes()
+                if indexes:
+                    return "healthy"
+                return "unhealthy"
+            
+            # Check Qdrant
+            elif os.getenv("QDRANT_URL"):
+                import aiohttp
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(f"{os.getenv('QDRANT_URL')}/collections") as response:
+                        if response.status == 200:
+                            return "healthy"
+                        return "unhealthy"
+            
+            # Check local vector DB
+            elif os.getenv("VECTOR_DB_HOST"):
+                import aiohttp
+                try:
+                    async with aiohttp.ClientSession() as session:
+                        async with session.get(f"http://{os.getenv('VECTOR_DB_HOST')}/health") as response:
+                            if response.status == 200:
+                                return "healthy"
+                            return "unhealthy"
+                except Exception:
+                    return "unhealthy"
+            
+            return "not_configured"
+            
+        except Exception as e:
+            logger.error(f"Vector DB check failed: {e}")
+            return "unhealthy"
 
     async def _check_elasticsearch(self) -> str:
         """Check Elasticsearch connectivity."""
-        # TODO: Implement actual Elasticsearch connectivity check
-        if os.getenv("ELASTICSEARCH_URL"):
-            return "healthy"
-        return "not_configured"
+        try:
+            if not os.getenv("ELASTICSEARCH_URL"):
+                return "not_configured"
+            
+            from elasticsearch import AsyncElasticsearch
+            
+            es_url = os.getenv("ELASTICSEARCH_URL")
+            es = AsyncElasticsearch([es_url])
+            
+            # Test connection
+            info = await es.info()
+            if info:
+                await es.close()
+                return "healthy"
+            else:
+                await es.close()
+                return "unhealthy"
+                
+        except Exception as e:
+            logger.error(f"Elasticsearch check failed: {e}")
+            return "unhealthy"
 
     async def _check_knowledge_graph(self) -> str:
         """Check knowledge graph connectivity."""
-        # TODO: Implement actual SPARQL endpoint connectivity check
-        if os.getenv("SPARQL_ENDPOINT"):
-            return "healthy"
-        return "not_configured"
+        try:
+            if not os.getenv("SPARQL_ENDPOINT"):
+                return "not_configured"
+            
+            import aiohttp
+            
+            sparql_endpoint = os.getenv("SPARQL_ENDPOINT")
+            
+            # Test with a simple SPARQL query
+            test_query = """
+            SELECT ?s ?p ?o WHERE {
+                ?s ?p ?o .
+            } LIMIT 1
+            """
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    sparql_endpoint,
+                    data={"query": test_query},
+                    headers={"Content-Type": "application/x-www-form-urlencoded"}
+                ) as response:
+                    if response.status == 200:
+                        return "healthy"
+                    return "unhealthy"
+                    
+        except Exception as e:
+            logger.error(f"Knowledge graph check failed: {e}")
+            return "unhealthy"
 
     async def _check_llm_api(self) -> str:
         """Check LLM API connectivity."""
-        # TODO: Implement actual LLM API connectivity check
-        if os.getenv("OPENAI_API_KEY") or os.getenv("ANTHROPIC_API_KEY"):
-            return "healthy"
-        return "not_configured"
+        try:
+            # Check OpenAI
+            if os.getenv("OPENAI_API_KEY"):
+                import openai
+                openai.api_key = os.getenv("OPENAI_API_KEY")
+                
+                # Test with a simple completion
+                try:
+                    response = openai.ChatCompletion.create(
+                        model="gpt-3.5-turbo",
+                        messages=[{"role": "user", "content": "Hello"}],
+                        max_tokens=5
+                    )
+                    if response:
+                        return "healthy"
+                except Exception:
+                    return "unhealthy"
+            
+            # Check Anthropic
+            elif os.getenv("ANTHROPIC_API_KEY"):
+                import anthropic
+                client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+                
+                # Test with a simple message
+                try:
+                    response = client.messages.create(
+                        model="claude-3-sonnet-20240229",
+                        max_tokens=5,
+                        messages=[{"role": "user", "content": "Hello"}]
+                    )
+                    if response:
+                        return "healthy"
+                except Exception:
+                    return "unhealthy"
+            
+            return "not_configured"
+            
+        except Exception as e:
+            logger.error(f"LLM API check failed: {e}")
+            return "unhealthy"
 
     async def _check_redis_cache(self) -> str:
         """Check Redis cache connectivity."""
-        if not os.getenv("REDIS_ENABLED", "false").lower() == "true":
-            return "not_configured"
-
         try:
-            # TODO: Implement actual Redis connectivity check
+            if not os.getenv("REDIS_ENABLED", "false").lower() == "true":
+                return "not_configured"
+            
+            import aioredis
+            
+            redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
+            
+            # Test Redis connection
+            redis = aioredis.from_url(redis_url)
+            await redis.ping()
+            await redis.close()
+            
             return "healthy"
-        except Exception:
+            
+        except Exception as e:
+            logger.error(f"Redis check failed: {e}")
             return "unhealthy"
 
     async def check_all_integrations(self) -> Dict[str, IntegrationStatus]:

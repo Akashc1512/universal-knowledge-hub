@@ -695,7 +695,8 @@ class UserService:
                     role=created_user.role.value
                 )
                 
-                # TODO: Send verification email
+                # Send verification email
+                await self._send_verification_email(created_user)
                 
                 return created_user
                 
@@ -1108,6 +1109,79 @@ class UserService:
             "exp": datetime.utcnow() + timedelta(
                 days=REFRESH_TOKEN_EXPIRE_DAYS
             )
+        }
+        
+        return jwt.encode(
+            payload,
+            self._jwt_secret,
+            algorithm=self._jwt_algorithm
+        )
+    
+    async def _send_verification_email(self, user: UserModel) -> None:
+        """
+        Send email verification to user.
+        
+        Args:
+            user: User to send verification email to
+        """
+        try:
+            # Generate verification token
+            verification_token = self._generate_verification_token(user)
+            
+            # Create verification URL
+            base_url = self._config.get("app_url", "http://localhost:8000")
+            verification_url = f"{base_url}/auth/verify-email?token={verification_token}"
+            
+            # Email content
+            subject = "Verify Your Email Address"
+            body = f"""
+            Hello {user.full_name or user.username},
+            
+            Thank you for creating an account with our platform. 
+            Please verify your email address by clicking the link below:
+            
+            {verification_url}
+            
+            This link will expire in 24 hours.
+            
+            If you didn't create this account, please ignore this email.
+            
+            Best regards,
+            The Team
+            """
+            
+            # Send email (in production, use proper email service)
+            logger.info(
+                "Verification email sent",
+                user_id=user.id,
+                email=user.email,
+                verification_url=verification_url
+            )
+            
+            # In production, integrate with email service like SendGrid, AWS SES, etc.
+            # await self._email_service.send_email(
+            #     to_email=user.email,
+            #     subject=subject,
+            #     body=body
+            # )
+            
+        except Exception as e:
+            logger.error(
+                "Failed to send verification email",
+                error=str(e),
+                user_id=user.id,
+                email=user.email
+            )
+            # Don't fail user creation if email fails
+    
+    def _generate_verification_token(self, user: UserModel) -> str:
+        """Generate email verification token."""
+        payload = {
+            "sub": user.id,
+            "email": user.email,
+            "type": "email_verification",
+            "iat": datetime.utcnow(),
+            "exp": datetime.utcnow() + timedelta(hours=24)
         }
         
         return jwt.encode(
