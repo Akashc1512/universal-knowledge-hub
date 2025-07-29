@@ -41,17 +41,69 @@ class MetricsCollector:
         )
         self._lock = asyncio.Lock()
 
-        # Time-based metrics
+        # Time-based metrics with automatic cleanup
         self.hourly_stats = defaultdict(
             lambda: {"requests": 0, "errors": 0, "avg_response_time": 0.0}
         )
 
-        # Business metrics
+        # Business metrics with memory limits
         self.confidence_scores = deque(maxlen=1000)
         self.query_lengths = deque(maxlen=1000)
+        
+        # Memory management
+        self.last_cleanup = datetime.now()
+        self.cleanup_interval = timedelta(hours=1)  # Cleanup every hour
+        self.max_hourly_stats_age = timedelta(days=7)  # Keep 7 days of hourly stats
+        self.max_user_activity_entries = 10000  # Limit user activity tracking
+
+    async def cleanup_old_data(self):
+        """Clean up old data to prevent memory bloat."""
+        async with self._lock:
+            try:
+                current_time = datetime.now()
+                
+                # Only cleanup if enough time has passed
+                if current_time - self.last_cleanup < self.cleanup_interval:
+                    return
+                
+                # Clean up old hourly stats
+                cutoff_time = current_time - self.max_hourly_stats_age
+                keys_to_remove = []
+                for timestamp in self.hourly_stats.keys():
+                    if isinstance(timestamp, datetime) and timestamp < cutoff_time:
+                        keys_to_remove.append(timestamp)
+                
+                for key in keys_to_remove:
+                    del self.hourly_stats[key]
+                
+                # Limit user activity tracking
+                if len(self.user_activity) > self.max_user_activity_entries:
+                    # Keep only the most active users
+                    sorted_users = sorted(self.user_activity.items(), key=lambda x: x[1], reverse=True)
+                    self.user_activity = defaultdict(int, dict(sorted_users[:self.max_user_activity_entries//2]))
+                
+                # Clean up old agent performance data
+                cutoff_time = current_time - timedelta(days=1)
+                agents_to_remove = []
+                for agent_name, data in self.agent_performance.items():
+                    last_used = data.get("last_used")
+                    if last_used and isinstance(last_used, datetime) and last_used < cutoff_time:
+                        if data.get("success_count", 0) == 0 and data.get("error_count", 0) == 0:
+                            agents_to_remove.append(agent_name)
+                
+                for agent_name in agents_to_remove:
+                    del self.agent_performance[agent_name]
+                
+                self.last_cleanup = current_time
+                logger.debug(f"Cleaned up analytics data: removed {len(keys_to_remove)} hourly stats, {len(agents_to_remove)} agent entries")
+                
+            except Exception as e:
+                logger.error(f"Error during analytics cleanup: {e}")
 
     async def increment_request(self, user_id: str, query: str, category: str = "general"):
         """Increment request counter with user tracking."""
+        await self.cleanup_old_data()  # Opportunistic cleanup
+        
         async with self._lock:
             self.request_counter += 1
             self.user_activity[user_id] += 1

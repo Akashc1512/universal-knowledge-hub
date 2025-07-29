@@ -179,108 +179,203 @@ class LeadOrchestrator:
         self, context: QueryContext, plan: Dict[str, Any], query_budget: int
     ) -> Dict[AgentType, AgentResult]:
         """
-        Execute agents in an optimized pipeline with parallel execution where possible.
-
+        Execute the agent pipeline with proper error handling and timeouts.
+        
         Args:
-            context: Query context
-            plan: Execution plan
-
+            context: Query context with user information
+            plan: Execution plan from planning phase
+            query_budget: Token budget for the query
+            
         Returns:
-            Results from each agent
+            Results from all agents in the pipeline
         """
         results = {}
-
-        # Phase 1: Retrieval
-        logger.info("Phase 1: Hybrid retrieval and analysis")
+        pipeline_start_time = time.time()
+        
         try:
+            # Phase 1: Retrieval and entity extraction
+            results = await self._execute_retrieval_phase(context, results)
+            
+            # Phase 2: Fact checking (depends on retrieval)
+            results = await self._execute_fact_checking_phase(context, results)
+            
+            # Phase 3: Synthesis (depends on fact checking)
+            results = await self._execute_synthesis_phase(context, results)
+            
+            # Phase 4: Citation (depends on synthesis and retrieval)
+            results = await self._execute_citation_phase(context, results)
+            
+            # Log pipeline completion
+            total_time = time.time() - pipeline_start_time
+            logger.info(f"Pipeline completed in {total_time:.2f}s", 
+                       extra={"context": context.query, "total_agents": len(results)})
+            
+            return results
+            
+        except Exception as e:
+            logger.error(f"Pipeline execution failed: {e}")
+            # Return partial results with error information
+            return self._handle_pipeline_failure(results, str(e))
+    
+    async def _execute_retrieval_phase(
+        self, context: QueryContext, results: Dict[AgentType, AgentResult]
+    ) -> Dict[AgentType, AgentResult]:
+        """Execute the retrieval phase with entity extraction."""
+        logger.info("Phase 1: Retrieval and entity extraction")
+        
+        try:
+            # Extract entities with timeout
+            entities = await asyncio.wait_for(
+                self._extract_entities_parallel(context.query), 
+                timeout=10
+            )
+            
+            # Prepare retrieval task
             retrieval_task = {
                 "query": context.query,
                 "max_tokens": context.user_context.get("max_tokens", 4000),
-                "entities": await self._extract_entities_parallel(context.query),
+                "entities": entities,
             }
-            retrieval_result = await self.agents[AgentType.RETRIEVAL].process_task(
-                retrieval_task, context
+            
+            # Execute retrieval with timeout
+            retrieval_result = await asyncio.wait_for(
+                self.agents[AgentType.RETRIEVAL].process_task(retrieval_task, context),
+                timeout=15
             )
             results[AgentType.RETRIEVAL] = retrieval_result
+            
+            if not retrieval_result.success:
+                logger.warning(f"Retrieval failed: {retrieval_result.error}")
+                
+        except asyncio.TimeoutError:
+            logger.error("Retrieval phase timed out")
+            results[AgentType.RETRIEVAL] = self._create_timeout_result("Retrieval timed out", 15000)
         except Exception as e:
             logger.error(f"Retrieval failed: {e}")
-            results[AgentType.RETRIEVAL] = handle_agent_failure(
-                AgentType.RETRIEVAL, e, context, results
-            )
-
-        # Phase 2: Fact checking and synthesis preparation
-        logger.info("Phase 2: Fact checking and synthesis preparation")
-        phase2_tasks = []
-
-        # Start fact checking with retrieved documents
-        if AgentType.RETRIEVAL in results and results[AgentType.RETRIEVAL].success:
-            fact_check_task = self.agents[AgentType.FACT_CHECK].process_task(
-                {
-                    "documents": results[AgentType.RETRIEVAL].data.get("documents", []),
-                    "query": context.query,
-                },
-                context,
-            )
-            phase2_tasks.append((AgentType.FACT_CHECK, fact_check_task))
-
-        # Execute phase 2 tasks in parallel
-        if phase2_tasks:
-            phase2_results = await asyncio.gather(
-                *[task for _, task in phase2_tasks], return_exceptions=True
-            )
-
-            for i, (agent_type, _) in enumerate(phase2_tasks):
-                if isinstance(phase2_results[i], Exception):
-                    logger.error(f"Phase 2 task failed: {phase2_results[i]}")
-                    results[agent_type] = handle_agent_failure(
-                        agent_type, phase2_results[i], context, results
-                    )
-                else:
-                    results[agent_type] = validate_agent_result(
-                        phase2_results[i], agent_type
-                    )
-
-        # Phase 3: Synthesis and citation (sequential due to dependencies)
-        logger.info("Phase 3: Synthesis and citation")
-
-        # Synthesis
-        synthesis_input = safe_prepare_synthesis_input(results, context)
+            results[AgentType.RETRIEVAL] = self._create_error_result(f"Retrieval failed: {str(e)}")
+        
+        return results
+    
+    async def _execute_fact_checking_phase(
+        self, context: QueryContext, results: Dict[AgentType, AgentResult]
+    ) -> Dict[AgentType, AgentResult]:
+        """Execute the fact checking phase."""
+        logger.info("Phase 2: Fact checking")
+        
+        # Skip if retrieval failed
+        if AgentType.RETRIEVAL not in results or not results[AgentType.RETRIEVAL].success:
+            logger.warning("Skipping fact checking due to retrieval failure")
+            results[AgentType.FACT_CHECK] = self._create_error_result("Skipped due to retrieval failure")
+            return results
+        
         try:
-            synthesis_result = await self.agents[AgentType.SYNTHESIS].process_task(
-                synthesis_input, context
+            fact_check_task = {
+                "documents": results[AgentType.RETRIEVAL].data.get("documents", []),
+                "query": context.query,
+            }
+            
+            fact_check_result = await asyncio.wait_for(
+                self.agents[AgentType.FACT_CHECK].process_task(fact_check_task, context),
+                timeout=20
             )
-            synthesis_result = validate_agent_result(synthesis_result, AgentType.SYNTHESIS)
+            results[AgentType.FACT_CHECK] = fact_check_result
+            
+            if not fact_check_result.success:
+                logger.warning(f"Fact checking failed: {fact_check_result.error}")
+                
+        except asyncio.TimeoutError:
+            logger.error("Fact checking timed out")
+            results[AgentType.FACT_CHECK] = self._create_timeout_result("Fact checking timed out", 20000)
         except Exception as e:
-            synthesis_result = handle_agent_failure(
-                AgentType.SYNTHESIS, e, context, results
+            logger.error(f"Fact checking failed: {e}")
+            results[AgentType.FACT_CHECK] = self._create_error_result(f"Fact checking failed: {str(e)}")
+        
+        return results
+    
+    async def _execute_synthesis_phase(
+        self, context: QueryContext, results: Dict[AgentType, AgentResult]
+    ) -> Dict[AgentType, AgentResult]:
+        """Execute the synthesis phase."""
+        logger.info("Phase 3: Synthesis")
+        
+        try:
+            synthesis_input = self._prepare_synthesis_input(results, context)
+            
+            synthesis_result = await asyncio.wait_for(
+                self.agents[AgentType.SYNTHESIS].process_task(synthesis_input, context),
+                timeout=15
             )
-        results[AgentType.SYNTHESIS] = synthesis_result
-
-        if not synthesis_result.success:
-            logger.error(f"Synthesis failed: {synthesis_result.error}")
-            # Don't return early - continue with what we have
-
-        # Citation (depends on synthesis)
+            results[AgentType.SYNTHESIS] = synthesis_result
+            
+            if not synthesis_result.success:
+                logger.error(f"Synthesis failed: {synthesis_result.error}")
+                
+        except asyncio.TimeoutError:
+            logger.error("Synthesis timed out")
+            results[AgentType.SYNTHESIS] = self._create_timeout_result("Synthesis timed out", 15000)
+        except Exception as e:
+            logger.error(f"Synthesis failed: {e}")
+            results[AgentType.SYNTHESIS] = self._create_error_result(f"Synthesis failed: {str(e)}")
+        
+        return results
+    
+    async def _execute_citation_phase(
+        self, context: QueryContext, results: Dict[AgentType, AgentResult]
+    ) -> Dict[AgentType, AgentResult]:
+        """Execute the citation phase."""
+        logger.info("Phase 4: Citation")
+        
         try:
             citation_input = {
-                "content": synthesis_result.data.get(
-                    "response", synthesis_result.data.get("answer", "")
+                "content": results.get(AgentType.SYNTHESIS, AgentResult()).data.get(
+                    "response", results.get(AgentType.SYNTHESIS, AgentResult()).data.get("answer", "")
                 ),
-                "sources": results.get(
-                    AgentType.RETRIEVAL, create_safe_agent_result()
-                ).data.get("documents", []),
+                "sources": results.get(AgentType.RETRIEVAL, AgentResult()).data.get("documents", []),
             }
-            citation_result = await self.agents[AgentType.CITATION].process_task(
-                citation_input, context
+            
+            citation_result = await asyncio.wait_for(
+                self.agents[AgentType.CITATION].process_task(citation_input, context),
+                timeout=10
             )
-            citation_result = validate_agent_result(citation_result, AgentType.CITATION)
+            results[AgentType.CITATION] = citation_result
+            
+        except asyncio.TimeoutError:
+            logger.error("Citation timed out")
+            results[AgentType.CITATION] = self._create_timeout_result("Citation timed out", 10000)
         except Exception as e:
-            citation_result = handle_agent_failure(
-                AgentType.CITATION, e, context, results
-            )
-        results[AgentType.CITATION] = citation_result
-
+            logger.error(f"Citation failed: {e}")
+            results[AgentType.CITATION] = self._create_error_result(f"Citation failed: {str(e)}")
+        
         return results
+    
+    def _create_timeout_result(self, message: str, execution_time_ms: int) -> AgentResult:
+        """Create a standardized timeout result."""
+        return AgentResult(
+            success=False,
+            error=message,
+            confidence=0.0,
+            execution_time_ms=execution_time_ms
+        )
+    
+    def _create_error_result(self, message: str) -> AgentResult:
+        """Create a standardized error result."""
+        return AgentResult(
+            success=False,
+            error=message,
+            confidence=0.0,
+            execution_time_ms=0
+        )
+    
+    def _handle_pipeline_failure(
+        self, partial_results: Dict[AgentType, AgentResult], error_message: str
+    ) -> Dict[AgentType, AgentResult]:
+        """Handle pipeline failure by returning partial results with error information."""
+        # Ensure all agent types have results (even if failed)
+        for agent_type in [AgentType.RETRIEVAL, AgentType.FACT_CHECK, AgentType.SYNTHESIS, AgentType.CITATION]:
+            if agent_type not in partial_results:
+                partial_results[agent_type] = self._create_error_result(f"Pipeline failed: {error_message}")
+        
+        return partial_results
 
     async def _extract_entities_parallel(self, query: str) -> List[Dict[str, Any]]:
         """Extract entities in parallel (if not already done by retrieval agent)."""

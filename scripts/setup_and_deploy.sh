@@ -1,66 +1,38 @@
 #!/bin/bash
-# Universal Knowledge Platform - Setup and Deployment Script
-# This script handles environment setup, dependency installation, and deployment
 
-set -e  # Exit on error
+# Universal Knowledge Hub - Setup and Deployment Script
+# This script sets up the development environment and deploys the application
+
+set -e
 
 # Colors for output
+RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-RED='\033[0;31m'
 NC='\033[0m' # No Color
 
 # Function to print colored output
-print_status() {
-    echo -e "${GREEN}✅ $1${NC}"
+print_section() {
+    echo -e "${BLUE}==========================================${NC}"
+    echo -e "${BLUE}$1${NC}"
+    echo -e "${BLUE}==========================================${NC}"
 }
 
-print_error() {
-    echo -e "${RED}❌ $1${NC}"
+print_status() {
+    echo -e "${BLUE}[INFO]${NC} $1"
+}
+
+print_success() {
+    echo -e "${GREEN}[SUCCESS]${NC} $1"
 }
 
 print_warning() {
-    echo -e "${YELLOW}⚠️  $1${NC}"
+    echo -e "${YELLOW}[WARNING]${NC} $1"
 }
 
-print_info() {
-    echo -e "${BLUE}ℹ️  $1${NC}"
-}
-
-print_section() {
-    echo -e "\n${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "${YELLOW}$1${NC}"
-    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-}
-
-# Parse command line arguments
-ACTION=${1:-help}
-ENVIRONMENT=${2:-development}
-
-# Show usage
-show_usage() {
-    echo "Universal Knowledge Platform - Setup and Deployment"
-    echo ""
-    echo "Usage: $0 [action] [environment]"
-    echo ""
-    echo "Actions:"
-    echo "  setup       - Setup development environment"
-    echo "  deploy      - Deploy the application"
-    echo "  test        - Run tests"
-    echo "  check       - Check system health"
-    echo "  clean       - Clean up resources"
-    echo "  help        - Show this help message"
-    echo ""
-    echo "Environments:"
-    echo "  development - Local development (default)"
-    echo "  production  - Production deployment"
-    echo "  docker      - Docker deployment"
-    echo ""
-    echo "Examples:"
-    echo "  $0 setup development"
-    echo "  $0 deploy production"
-    echo "  $0 test"
+print_error() {
+    echo -e "${RED}[ERROR]${NC} $1"
 }
 
 # Check prerequisites
@@ -72,7 +44,7 @@ check_prerequisites() {
         PYTHON_VERSION=$(python3 --version | cut -d' ' -f2)
         print_status "Python 3 found: $PYTHON_VERSION"
     else
-        print_error "Python 3 not found. Please install Python 3.9+"
+        print_error "Python 3 not found. Please install Python 3.13.5+"
         exit 1
     fi
     
@@ -101,222 +73,151 @@ check_prerequisites() {
 }
 
 # Setup development environment
-setup_development() {
-    print_section "Setting Up Development Environment"
+setup_dev_environment() {
+    print_section "Setting up Development Environment"
     
     # Create virtual environment
     if [ ! -d ".venv" ]; then
-        print_info "Creating Python virtual environment..."
+        print_status "Creating Python virtual environment..."
         python3 -m venv .venv
-        print_status "Virtual environment created"
+        print_success "Virtual environment created"
     else
-        print_status "Virtual environment already exists"
+        print_success "Virtual environment already exists"
     fi
     
     # Activate virtual environment
+    print_status "Activating virtual environment..."
     source .venv/bin/activate
     
     # Upgrade pip
-    print_info "Upgrading pip..."
-    pip install --upgrade pip --quiet
+    print_status "Upgrading pip..."
+    pip install --upgrade pip setuptools wheel
     
     # Install Python dependencies
-    print_info "Installing Python dependencies..."
-    pip install -r requirements.txt --quiet
-    print_status "Python dependencies installed"
+    print_status "Installing Python dependencies..."
+    pip install -r requirements.txt
     
-    # Setup environment file
-    if [ ! -f ".env" ]; then
-        print_info "Creating .env file from template..."
-        cp env.template .env
-        print_status ".env file created"
-        print_warning "Please update .env with your configuration"
-    else
-        print_status ".env file already exists"
+    if [ -f "requirements-dev.txt" ]; then
+        print_status "Installing development dependencies..."
+        pip install -r requirements-dev.txt
     fi
     
-    # Create required directories
-    print_info "Creating required directories..."
-    mkdir -p logs data uploads temp cache
-    print_status "Directories created"
+    print_success "Python dependencies installed"
     
-    # Install frontend dependencies (if Node.js is available)
-    if command -v npm &> /dev/null && [ -d "frontend" ]; then
-        print_info "Installing frontend dependencies..."
+    # Setup frontend
+    if [ -d "frontend" ]; then
+        print_status "Setting up frontend dependencies..."
         cd frontend
-        npm install --quiet
+        npm install
         cd ..
-        print_status "Frontend dependencies installed"
-    fi
-    
-    # Start required services with Docker
-    if command -v docker-compose &> /dev/null; then
-        print_info "Starting required services (Redis, Elasticsearch)..."
-        docker-compose up -d redis elasticsearch
-        print_status "Services started"
+        print_success "Frontend dependencies installed"
     else
-        print_warning "Docker Compose not found. Please start Redis and Elasticsearch manually"
+        print_warning "Frontend directory not found"
     fi
-    
-    print_status "Development environment setup complete!"
-}
-
-# Deploy application
-deploy_application() {
-    print_section "Deploying Application ($ENVIRONMENT)"
-    
-    case $ENVIRONMENT in
-        development)
-            print_info "Starting development server..."
-            source .venv/bin/activate
-            python start_api.py
-            ;;
-            
-        production)
-            print_info "Building for production..."
-            
-            # Build Docker image
-            docker build -t sarvanom:latest .
-            print_status "Docker image built"
-            
-            # Run with Docker Compose
-            docker-compose -f docker-compose.yml up -d
-            print_status "Application deployed"
-            
-            # Show status
-            docker-compose ps
-            ;;
-            
-        docker)
-            print_info "Deploying with Docker..."
-            docker-compose up -d
-            print_status "Docker deployment complete"
-            ;;
-            
-        *)
-            print_error "Unknown environment: $ENVIRONMENT"
-            exit 1
-            ;;
-    esac
 }
 
 # Run tests
 run_tests() {
     print_section "Running Tests"
     
+    # Activate virtual environment
     source .venv/bin/activate
     
-    # Run linting
-    print_info "Running code linting..."
-    flake8 api/ agents/ --count --select=E9,F63,F7,F82 --quiet || true
+    print_status "Running Python tests..."
+    python -m pytest tests/ -v --cov=api --cov=agents --cov-report=html
     
-    # Run unit tests
-    print_info "Running unit tests..."
-    pytest tests/ -v --tb=short || true
+    print_status "Running security scan..."
+    bandit -r api/ agents/ -f json -o bandit-report.json || true
     
-    # Check imports
-    print_info "Checking imports..."
-    python -c "
-import api.main
-import api.health_checks
-import api.connection_pool
-import api.validators
-import api.retry_logic
-import api.versioning
-import api.rate_limiter
-import api.shutdown_handler
-print('All imports successful')
-    "
-    
-    print_status "Tests completed"
+    print_success "Tests completed"
 }
 
-# Check system health
-check_health() {
-    print_section "Checking System Health"
+# Start development servers
+start_dev_servers() {
+    print_section "Starting Development Servers"
     
-    # Check API health
-    if curl -s http://localhost:8002/health > /dev/null 2>&1; then
-        print_status "API is running"
-        curl -s http://localhost:8002/health | python -m json.tool
-    else
-        print_error "API is not responding"
+    # Start backend
+    print_status "Starting backend server..."
+    source .venv/bin/activate
+    uvicorn api.main:app --reload --host 0.0.0.0 --port 8000 &
+    BACKEND_PID=$!
+    print_success "Backend started on http://localhost:8000"
+    
+    # Start frontend
+    if [ -d "frontend" ]; then
+        print_status "Starting frontend server..."
+        cd frontend
+        npm run dev &
+        FRONTEND_PID=$!
+        cd ..
+        print_success "Frontend started on http://localhost:3000"
     fi
     
-    # Check Redis
-    if redis-cli ping > /dev/null 2>&1; then
-        print_status "Redis is running"
-    else
-        print_warning "Redis is not responding"
-    fi
+    print_success "Development servers started"
+    print_status "Press Ctrl+C to stop all servers"
     
-    # Check Elasticsearch
-    if curl -s http://localhost:9200/_health > /dev/null 2>&1; then
-        print_status "Elasticsearch is running"
-    else
-        print_warning "Elasticsearch is not responding"
-    fi
+    # Wait for user to stop
+    wait
 }
 
-# Clean up resources
-cleanup_resources() {
-    print_section "Cleaning Up Resources"
+# Deploy to production
+deploy_production() {
+    print_section "Deploying to Production"
     
-    # Stop services
-    if command -v docker-compose &> /dev/null; then
-        print_info "Stopping Docker services..."
-        docker-compose down
-        print_status "Services stopped"
+    # Check if we're in a production environment
+    if [ "$ENVIRONMENT" != "production" ]; then
+        print_error "Production deployment requires ENVIRONMENT=production"
+        exit 1
     fi
     
-    # Clean Python cache
-    print_info "Cleaning Python cache..."
-    find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
-    find . -type f -name "*.pyc" -delete 2>/dev/null || true
-    print_status "Python cache cleaned"
+    print_status "Building production image..."
+    docker build -t universal-knowledge-hub:latest .
     
-    # Clean logs (optional)
-    read -p "Clean log files? (y/N) " -n 1 -r
-    echo
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        rm -f logs/*.log
-        print_status "Log files cleaned"
-    fi
+    print_status "Deploying to Kubernetes..."
+    kubectl apply -f k8s/
+    
+    print_status "Waiting for deployment to be ready..."
+    kubectl rollout status deployment/universal-knowledge-hub
+    
+    print_success "Production deployment completed"
 }
 
-# Main execution
+# Main function
 main() {
-    echo "🚀 Universal Knowledge Platform - Setup and Deployment"
-    echo "======================================================"
+    print_section "Universal Knowledge Hub - Setup and Deployment"
     
-    case $ACTION in
-        setup)
+    case "${1:-setup}" in
+        "setup")
             check_prerequisites
-            setup_development
+            setup_dev_environment
+            print_success "Development environment setup completed"
             ;;
-            
-        deploy)
-            check_prerequisites
-            deploy_application
-            ;;
-            
-        test)
+        "test")
             run_tests
             ;;
-            
-        check)
-            check_health
+        "dev")
+            start_dev_servers
             ;;
-            
-        clean)
-            cleanup_resources
+        "deploy")
+            deploy_production
             ;;
-            
-        help|*)
-            show_usage
+        "all")
+            check_prerequisites
+            setup_dev_environment
+            run_tests
+            start_dev_servers
+            ;;
+        *)
+            echo "Usage: $0 {setup|test|dev|deploy|all}"
+            echo "  setup   - Setup development environment"
+            echo "  test    - Run tests"
+            echo "  dev     - Start development servers"
+            echo "  deploy  - Deploy to production"
+            echo "  all     - Run all steps"
+            exit 1
             ;;
     esac
 }
 
 # Run main function
-main 
+main "$@" 

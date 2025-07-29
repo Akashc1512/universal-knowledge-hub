@@ -49,6 +49,7 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.hazmat.primitives.asymmetric import rsa, padding
 from cryptography.hazmat.primitives import serialization
+from fastapi import Request, Response
 
 from api.exceptions import ValidationError, SecurityError
 from api.monitoring import Counter, Histogram
@@ -512,7 +513,7 @@ class ThreatDetector:
             ThreatType.SQL_INJECTION.value: [
                 re.compile(r"'.*'", re.IGNORECASE),
                 re.compile(r"--", re.IGNORECASE),
-                re.compile(r"/*.**/", re.IGNORECASE),
+                re.compile(r"/\*.*\*/", re.IGNORECASE),
             ],
             ThreatType.XSS.value: [
                 re.compile(r"<script", re.IGNORECASE),

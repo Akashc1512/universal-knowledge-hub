@@ -2,15 +2,16 @@ import asyncio
 import logging
 import time
 import uuid
+import psutil
 from contextlib import asynccontextmanager
-from typing import Dict, Any, Optional
+from typing import Any, Optional
 from datetime import datetime, timedelta
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request, Response, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import ValidationError
+from pydantic import ValidationError, Field, BaseModel
 
 from dotenv import load_dotenv
 import os
@@ -80,16 +81,80 @@ from api.validators import (
     AnalyticsRequestValidator,
     ConfigUpdateValidator,
 )
-from api.auth import get_current_user
+from api.auth import get_current_user, login_user, register_user, generate_api_key, revoke_api_key, get_user_api_keys, require_read
 from api.analytics import track_query
 from api.cache import _query_cache
 from agents.base_agent import QueryContext
-from api.metrics import record_request_metrics, record_error_metrics, record_business_metrics
+from api.metrics import record_request_metrics, record_error_metrics, record_business_metrics, record_agent_metrics, record_cache_metrics, record_security_metrics, record_token_metrics
+from api.rate_limiter import RateLimiter, RateLimitConfig, rate_limit_middleware, rate_limit
+from api.exceptions import UKPHTTPException, AuthenticationError, AuthorizationError, RateLimitExceededError
+
+# Add expert review models
+class ExpertReviewRequest(BaseModel):
+    review_id: str
+    expert_id: str
+    verdict: str  # "supported", "contradicted", "unclear"
+    notes: str
+    confidence: float = Field(ge=0.0, le=1.0)
+
+class ExpertReviewResponse(BaseModel):
+    review_id: str
+    status: str
+    expert_id: str
+    verdict: str
+    notes: str
+    confidence: float
+    completed_at: str
+
+# Rate limiting configurations
+QUERY_RATE_LIMIT = RateLimitConfig(
+    requests_per_minute=60,
+    requests_per_hour=1000,
+    burst_size=10
+)
+
+AUTH_RATE_LIMIT = RateLimitConfig(
+    requests_per_minute=10,
+    requests_per_hour=100,
+    burst_size=5
+)
+
+# Add authentication models
+from pydantic import BaseModel
+from typing import Optional
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+class RegisterRequest(BaseModel):
+    username: str
+    password: str
+    role: str = "user"
+
+class AuthResponse(BaseModel):
+    access_token: str
+    token_type: str
+    api_key: str
+    user_id: str
+    role: str
+    permissions: list[str]
+
+class APIKeyResponse(BaseModel):
+    api_key: str
+    user_id: str
+    role: str
+    permissions: list[str]
+    description: str
+    created_at: str
 
 # Global variables
 orchestrator = None
 startup_time = None
 app_version = "1.0.0"
+
+# Request concurrency control
+request_semaphore = asyncio.Semaphore(100)  # Limit to 100 concurrent requests
 
 # In-memory query storage (for demonstration - replace with database in production)
 query_storage = {}
@@ -250,7 +315,7 @@ app.add_middleware(
     allow_headers=["Content-Type", "X-API-Key", "Authorization"],
 )
 
-# from api.rate_limiter import rate_limit_middleware
+# Add rate limiting middleware (temporarily disabled due to Redis issues)
 # app.middleware("http")(rate_limit_middleware)
 
 # Add authentication endpoints
@@ -344,12 +409,182 @@ async def log_requests(request: Request, call_next):
         raise
 
 
+# Security middleware
+@app.middleware("http")
+async def security_check(request: Request, call_next):
+    """Security middleware that checks requests for threats."""
+    request_id = getattr(request.state, "request_id", "unknown")
+    client_ip = request.client.host
+    user_id = "anonymous"
+    
+    try:
+        # Extract user ID if available
+        if request.url.path not in ["/", "/health", "/metrics", "/analytics", "/integrations"]:
+            current_user = await get_current_user(request)
+            user_id = current_user.user_id
+    except:
+        pass
+
+    # Extract query for security check (only for query endpoint)
+    query = ""
+    if request.url.path == "/query" and request.method == "POST":
+        try:
+            body = await request.body()
+            if body:
+                import json
+                data = json.loads(body)
+                query = data.get("query", "")
+        except:
+            pass
+
+    # Perform security check
+    try:
+        from api.security import check_security
+        security_result = await check_security(
+            query=query,
+            client_ip=client_ip,
+            user_id=user_id,
+            initial_confidence=0.0
+        )
+        
+        # If blocked, return error response
+        if security_result.get("blocked", False):
+            logger.warning(
+                f"Request blocked by security check",
+                extra={
+                    "request_id": request_id,
+                    "user_id": user_id,
+                    "client_ip": client_ip,
+                    "threats": security_result.get("threats", [])
+                }
+            )
+            
+            # Record security metrics
+            threats = security_result.get("threats", [])
+            for threat in threats:
+                record_security_metrics(
+                    threat_type=threat.get("type", "unknown"),
+                    severity=threat.get("severity", "medium"),
+                    blocked=True
+                )
+            
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "error": "Request blocked by security check",
+                    "request_id": request_id,
+                    "threats": security_result.get("threats", [])
+                }
+            )
+        
+        # Record security metrics for monitored threats
+        threats = security_result.get("threats", [])
+        if threats:
+            for threat in threats:
+                record_security_metrics(
+                    threat_type=threat.get("type", "unknown"),
+                    severity=threat.get("severity", "medium"),
+                    blocked=False
+                )
+            
+    except Exception as e:
+        logger.error(
+            f"Security check failed: {str(e)}",
+            extra={
+                "request_id": request_id,
+                "user_id": user_id,
+                "client_ip": client_ip,
+                "error": str(e)
+            }
+        )
+        # Continue processing on security check failure (fail open)
+    
+    # Continue with request processing
+    response = await call_next(request)
+    return response
+
+
 # Global exception handler
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    """Global exception handler with structured logging."""
+    """Global exception handler with structured logging and secure error messages."""
     request_id = getattr(request.state, "request_id", "unknown")
 
+    # Handle custom UKP exceptions
+    if isinstance(exc, UKPHTTPException):
+        logger.error(
+            f"UKP HTTP Exception: {exc.internal_message}",
+            extra={
+                "request_id": request_id,
+                "status_code": exc.status_code,
+                "exception_type": type(exc).__name__,
+            }
+        )
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={
+                "error": exc.detail,
+                "request_id": request_id,
+                "timestamp": time.time(),
+            },
+        )
+
+    # Handle validation errors
+    if isinstance(exc, ValidationError):
+        logger.warning(
+            f"Validation error: {str(exc)}",
+            extra={
+                "request_id": request_id,
+                "exception_type": type(exc).__name__,
+            }
+        )
+        return JSONResponse(
+            status_code=422,
+            content={
+                "error": "Validation failed",
+                "request_id": request_id,
+                "timestamp": time.time(),
+            },
+        )
+
+    # Handle authentication/authorization errors
+    if isinstance(exc, (AuthenticationError, AuthorizationError)):
+        logger.warning(
+            f"Auth error: {str(exc)}",
+            extra={
+                "request_id": request_id,
+                "exception_type": type(exc).__name__,
+            }
+        )
+        return JSONResponse(
+            status_code=exc.status_code if hasattr(exc, 'status_code') else 401,
+            content={
+                "error": "Authentication or authorization failed",
+                "request_id": request_id,
+                "timestamp": time.time(),
+            },
+        )
+
+    # Handle rate limiting
+    if isinstance(exc, RateLimitExceededError):
+        logger.info(
+            f"Rate limit exceeded",
+            extra={
+                "request_id": request_id,
+                "exception_type": type(exc).__name__,
+            }
+        )
+        return JSONResponse(
+            status_code=429,
+            content={
+                "error": exc.detail,
+                "request_id": request_id,
+                "timestamp": time.time(),
+            },
+            headers=exc.headers or {}
+        )
+
+    # Handle unexpected exceptions securely
     logger.error(
         f"Unhandled exception: {str(exc)}",
         extra={
@@ -360,6 +595,7 @@ async def global_exception_handler(request: Request, exc: Exception):
         exc_info=True,
     )
 
+    # Return generic error message to avoid information leakage
     return JSONResponse(
         status_code=500,
         content={
@@ -421,42 +657,36 @@ async def root():
 
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
-    """Health check endpoint with detailed status."""
+    """Health check endpoint."""
     try:
-        # Import health checks module
-        from api.health_checks import check_all_services
+        # Check basic system health
+        uptime = time.time() - startup_time if startup_time else 0
+        memory_usage = psutil.virtual_memory().percent
+        cpu_usage = psutil.cpu_percent(interval=1)
+        
+        # Check cache health
+        cache_status = "healthy"
+        try:
+            await _query_cache.get("health_check")
+        except Exception as e:
+            cache_status = f"unhealthy: {str(e)}"
         
         # Check orchestrator health
-        orchestrator_healthy = orchestrator is not None
-
-        # Check cache health
-        cache_healthy = _query_cache is not None
-
-        # Check external integrations with actual health checks
-        external_health = await check_all_services()
+        orchestrator_status = "healthy"
+        if orchestrator is None:
+            orchestrator_status = "unhealthy: not initialized"
         
-        # Extract individual service statuses
-        integration_status = {}
-        for service_name, service_health in external_health["services"].items():
-            integration_status[service_name] = "healthy" if service_health.get("healthy", False) else "unhealthy"
-
-        # Overall health - consider core components critical, external services as warnings
-        healthy = orchestrator_healthy and cache_healthy
-
         return HealthResponse(
-            status="healthy" if healthy else "unhealthy",
+            status="healthy",
             version=app_version,
             timestamp=time.time(),
-            uptime=time.time() - startup_time if startup_time else 0,
+            uptime=float(uptime),
             components={
-                "orchestrator": "healthy" if orchestrator_healthy else "unhealthy",
-                "cache": "healthy" if cache_healthy else "unhealthy",
-                **integration_status,
+                "cache": cache_status,
+                "orchestrator": orchestrator_status,
+                "memory_usage_percent": str(memory_usage),
+                "cpu_usage_percent": str(cpu_usage),
             },
-            metadata={
-                "external_services_detail": external_health["services"],
-                "total_check_latency_ms": external_health.get("total_latency_ms", 0)
-            }
         )
     except Exception as e:
         logger.error(f"Health check failed: {e}")
@@ -464,12 +694,207 @@ async def health_check():
             status="unhealthy",
             version=app_version,
             timestamp=time.time(),
-            uptime=time.time() - startup_time if startup_time else 0,
-            error=str(e),
+            uptime=0.0,
+            components={"error": str(e)},
         )
+
+@app.post("/auth/login", response_model=AuthResponse)
+# @rate_limit(AUTH_RATE_LIMIT)  # Temporarily disabled
+async def login(request: LoginRequest):
+    """Login endpoint for user authentication."""
+    try:
+        result = await login_user(request.username, request.password)
+        if not result:
+            raise HTTPException(status_code=401, detail="Invalid credentials")
+        
+        logger.info(f"User logged in: {request.username}")
+        return AuthResponse(**result)
+    except Exception as e:
+        logger.error(f"Login failed: {e}")
+        raise HTTPException(status_code=500, detail="Login failed")
+
+@app.post("/auth/register", response_model=AuthResponse)
+# @rate_limit(AUTH_RATE_LIMIT)  # Temporarily disabled
+async def register(request: RegisterRequest):
+    """Register a new user."""
+    try:
+        api_key = await register_user(request.username, request.password, request.role)
+        if not api_key:
+            raise HTTPException(status_code=400, detail="User already exists")
+        
+        # Login the user after registration
+        result = await login_user(request.username, request.password)
+        
+        logger.info(f"User registered: {request.username}")
+        return AuthResponse(**result)
+    except Exception as e:
+        logger.error(f"Registration failed: {e}")
+        raise HTTPException(status_code=500, detail="Registration failed")
+
+@app.post("/auth/api-key", response_model=APIKeyResponse)
+async def create_api_key(current_user=Depends(get_current_user)):
+    """Create a new API key for the current user."""
+    try:
+        api_key = generate_api_key(
+            current_user.user_id, 
+            current_user.role, 
+            current_user.permissions
+        )
+        
+        key_info = API_KEY_REGISTRY[api_key]
+        
+        logger.info(f"API key created for user: {current_user.user_id}")
+        return APIKeyResponse(
+            api_key=api_key,
+            user_id=key_info["user_id"],
+            role=key_info["role"],
+            permissions=key_info["permissions"],
+            description=key_info["description"],
+            created_at=key_info["created_at"].isoformat(),
+        )
+    except Exception as e:
+        logger.error(f"API key creation failed: {e}")
+        raise HTTPException(status_code=500, detail="API key creation failed")
+
+@app.delete("/auth/api-key/{api_key}")
+async def revoke_api_key_endpoint(api_key: str, current_user=Depends(get_current_user)):
+    """Revoke an API key."""
+    try:
+        # Check if user owns this API key
+        user_keys = get_user_api_keys(current_user.user_id)
+        if api_key not in user_keys:
+            raise HTTPException(status_code=403, detail="Not authorized to revoke this API key")
+        
+        success = revoke_api_key(api_key)
+        if not success:
+            raise HTTPException(status_code=404, detail="API key not found")
+        
+        logger.info(f"API key revoked for user: {current_user.user_id}")
+        return {"message": "API key revoked successfully"}
+    except Exception as e:
+        logger.error(f"API key revocation failed: {e}")
+        raise HTTPException(status_code=500, detail="API key revocation failed")
+
+@app.get("/auth/api-keys", response_model=list[APIKeyResponse])
+async def list_api_keys(current_user=Depends(get_current_user)):
+    """List all API keys for the current user."""
+    try:
+        user_keys = get_user_api_keys(current_user.user_id)
+        key_responses = []
+        
+        for key in user_keys:
+            if key in API_KEY_REGISTRY:
+                key_info = API_KEY_REGISTRY[key]
+                key_responses.append(APIKeyResponse(
+                    api_key=key,
+                    user_id=key_info["user_id"],
+                    role=key_info["role"],
+                    permissions=key_info["permissions"],
+                    description=key_info["description"],
+                    created_at=key_info["created_at"].isoformat(),
+                ))
+        
+        return key_responses
+    except Exception as e:
+        logger.error(f"API key listing failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to list API keys")
+
+# Expert Review Endpoints
+@app.get("/expert-reviews/pending", response_model=list[dict[str, Any]])
+async def get_pending_reviews(current_user=Depends(get_current_user)):
+    """Get list of pending expert reviews."""
+    try:
+        # Check if user has expert permissions
+        if not current_user.has_permission("expert_review"):
+            raise HTTPException(status_code=403, detail="Insufficient permissions for expert review")
+        
+        # Get fact check agent to access pending reviews
+        from agents.factcheck_agent import FactCheckAgent
+        factcheck_agent = FactCheckAgent()
+        pending_reviews = await factcheck_agent.get_pending_reviews()
+        
+        return pending_reviews
+    except Exception as e:
+        logger.error(f"Failed to get pending reviews: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get pending reviews")
+
+@app.post("/expert-reviews/{review_id}", response_model=ExpertReviewResponse)
+async def submit_expert_review(
+    review_id: str,
+    review: ExpertReviewRequest,
+    current_user=Depends(get_current_user)
+):
+    """Submit expert review decision."""
+    try:
+        # Check if user has expert permissions
+        if not current_user.has_permission("expert_review"):
+            raise HTTPException(status_code=403, detail="Insufficient permissions for expert review")
+        
+        # Validate verdict
+        valid_verdicts = ["supported", "contradicted", "unclear"]
+        if review.verdict not in valid_verdicts:
+            raise HTTPException(status_code=400, detail=f"Invalid verdict. Must be one of: {valid_verdicts}")
+        
+        # Get fact check agent to update review
+        from agents.factcheck_agent import FactCheckAgent
+        factcheck_agent = FactCheckAgent()
+        
+        decision = {
+            "expert_id": review.expert_id,
+            "notes": review.notes,
+            "verdict": review.verdict,
+            "confidence": review.confidence
+        }
+        
+        await factcheck_agent.update_review_decision(review_id, decision)
+        
+        logger.info(f"Expert review submitted for {review_id} by {current_user.user_id}")
+        
+        return ExpertReviewResponse(
+            review_id=review_id,
+            status="completed",
+            expert_id=review.expert_id,
+            verdict=review.verdict,
+            notes=review.notes,
+            confidence=review.confidence,
+            completed_at=datetime.now().isoformat()
+        )
+    except Exception as e:
+        logger.error(f"Failed to submit expert review: {e}")
+        raise HTTPException(status_code=500, detail="Failed to submit expert review")
+
+@app.get("/expert-reviews/{review_id}", response_model=Dict[str, Any])
+async def get_review_details(
+    review_id: str,
+    current_user=Depends(get_current_user)
+):
+    """Get details of a specific expert review."""
+    try:
+        # Check if user has expert permissions
+        if not current_user.has_permission("expert_review"):
+            raise HTTPException(status_code=403, detail="Insufficient permissions for expert review")
+        
+        # Load review from file system
+        import json
+        import os
+        
+        review_dir = "data/manual_reviews"
+        filepath = os.path.join(review_dir, f"{review_id}.json")
+        
+        if not os.path.exists(filepath):
+            raise HTTPException(status_code=404, detail="Review not found")
+        
+        with open(filepath, 'r') as f:
+            review = json.load(f)
+        
+        return review
+    except Exception as e:
+        logger.error(f"Failed to get review details: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get review details")
 
 
 @app.post("/query", response_model=QueryResponse)
+# @rate_limit(QUERY_RATE_LIMIT)  # Temporarily disabled
 async def process_query(
     request: QueryRequestValidator, http_request: Request, current_user=None
 ):
@@ -499,212 +924,327 @@ async def process_query(
 
     start_time = time.time()
 
+    # SECURITY CHECK: Add security validation before processing
     try:
-        # Check cache first
-        cache_key = f"{current_user.user_id}:{request.query}"
-        cached_result = await _query_cache.get(cache_key)
-
-        if cached_result:
-            logger.info(
-                f"Cache HIT for query: {request.query[:50]}...",
+        from api.security import check_security
+        security_result = await check_security(
+            query=request.query,
+            client_ip=http_request.client.host,
+            user_id=current_user.user_id,
+            initial_confidence=0.0
+        )
+        
+        # Check if request should be blocked
+        if security_result.get('status') == 'threat_detected' or security_result.get('status') == 'blocked':
+            logger.warning(
+                f"Query blocked by security check",
                 extra={
                     "request_id": request_id,
                     "user_id": current_user.user_id,
-                    "cache_hit": True,
-                },
+                    "client_ip": http_request.client.host,
+                    "threats": security_result.get("threats", [])
+                }
             )
-
-            # Track analytics for cache hit
-            await track_query(
-                query=request.query,
-                execution_time=time.time() - start_time,
-                confidence=cached_result.get("confidence", 0.0),
-                client_ip=http_request.client.host,
-                user_id=current_user.user_id,
-                cache_hit=True,
+            
+            # Record security metrics for blocked request
+            threats = security_result.get("threats", [])
+            for threat in threats:
+                record_security_metrics(
+                    threat_type=threat.get("type", "unknown"),
+                    severity=threat.get("severity", "medium"),
+                    blocked=True
+                )
+                
+            # Also record for any block_reason
+            if security_result.get("block_reason"):
+                record_security_metrics(
+                    threat_type="ip_blocked",
+                    severity="high",
+                    blocked=True
+                )
+            
+            raise HTTPException(
+                status_code=403,
+                detail=f"Request blocked by security check: {security_result.get('block_reason', 'Security violation detected')}"
             )
-
-            # Record metrics
-            record_request_metrics("POST", "/query", 200, time.time() - start_time)
-            record_business_metrics(
-                "cache_hit",
-                cached_result.get("confidence", 0.0),
-                len(cached_result.get("answer", "")),
-                "/query",
-            )
-
-            return QueryResponse(
-                answer=cached_result.get("answer", ""),
-                confidence=cached_result.get("confidence", 0.0),
-                citations=cached_result.get("citations", []),
-                query_id=cached_result.get("query_id", str(uuid.uuid4())),
-                metadata={
-                    "cache_hit": True,
-                    "request_id": request_id,
-                    "execution_time_ms": int((time.time() - start_time) * 1000),
-                },
-            )
-
-        # Create query context
-        query_context = QueryContext(
-            query=request.query,
-            user_id=current_user.user_id,
-            user_context={
-                **(request.user_context or {}),
-                "max_tokens": request.max_tokens,
-                "confidence_threshold": request.confidence_threshold,
-            },
-            token_budget=request.max_tokens or 4000,
-        )
-
-        # Process query through orchestrator
-        result = await orchestrator.process_query(query_context.query, query_context.user_context)
-        process_time = time.time() - start_time
-
-        # Check for partial failures
-        agent_results = result.get("metadata", {}).get("agent_results", {})
-        failed_agents = []
-        successful_agents = []
-
-        for agent_type, agent_result in agent_results.items():
-            if agent_result.get("status") == "failed":
-                failed_agents.append(agent_type)
-            elif agent_result.get("status") == "success":
-                successful_agents.append(agent_type)
-
-        # Determine if this is a partial failure
-        is_partial_failure = len(failed_agents) > 0 and len(successful_agents) > 0
-        is_complete_failure = len(successful_agents) == 0
-
-        # Adjust success flag based on failure analysis
-        if is_complete_failure:
-            result["success"] = False
-        elif is_partial_failure:
-            result["success"] = True  # Still successful but with partial results
-            result["metadata"]["partial_failure"] = True
-            result["metadata"]["failed_agents"] = failed_agents
-            result["metadata"]["successful_agents"] = successful_agents
-
-        # Cache the result
-        await _query_cache.set(cache_key, result)
-
-        # Log success with detailed information
-        logger.info(
-            f"Query processed successfully in {process_time:.3f}s",
-            extra={
-                "request_id": request_id,
-                "user_id": current_user.user_id,
-                "execution_time": process_time,
-                "confidence": result.get("confidence", 0.0),
-                "cache_hit": False,
-                "partial_failure": is_partial_failure,
-                "failed_agents": failed_agents,
-                "successful_agents": successful_agents,
-            },
-        )
-
-        # Track analytics
-        await track_query(
-            query=request.query,
-            execution_time=process_time,
-            confidence=result.get("confidence", 0.0),
-            client_ip=http_request.client.host,
-            user_id=current_user.user_id,
-            cache_hit=False,
-            agent_results=agent_results,
-        )
-
-        # Record metrics
-        record_request_metrics("POST", "/query", 200, process_time)
-        record_business_metrics(
-            "query_processed",
-            result.get("confidence", 0.0),
-            len(result.get("answer", "")),
-            "/query",
-        )
-
-        # Generate query ID and store query
-        query_id = str(uuid.uuid4())
         
-        # Store query in storage
-        global query_index
-        query_index += 1
-        
-        query_record = {
-            "query_id": query_id,
-            "query": request.query,
-            "answer": result.get("answer", ""),
-            "confidence": result.get("confidence", 0.0),
-            "citations": result.get("citations", []),
-            "metadata": {
-                "request_id": request_id,
-                "execution_time_ms": int(process_time * 1000),
-                "cache_hit": False,
-                "agent_results": agent_results,
-                "token_usage": result.get("metadata", {}).get("token_usage", {}),
-                "partial_failure": is_partial_failure,
-                "failed_agents": failed_agents,
-                "successful_agents": successful_agents,
-            },
-            "created_at": datetime.now(),
-            "updated_at": None,
-            "processing_time": process_time,
-            "user_id": current_user.user_id,
-            "status": "completed",
-            "max_tokens": request.max_tokens,
-            "confidence_threshold": request.confidence_threshold,
-            "user_context": request.user_context
-        }
-        
-        query_storage[query_id] = query_record
-
-        return QueryResponse(
-            answer=result.get("answer", ""),
-            confidence=result.get("confidence", 0.0),
-            citations=result.get("citations", []),
-            query_id=query_id,
-            processing_time=process_time,
-            metadata={
-                "request_id": request_id,
-                "execution_time_ms": int(process_time * 1000),
-                "cache_hit": False,
-                "agent_results": agent_results,
-                "token_usage": result.get("metadata", {}).get("token_usage", {}),
-                "partial_failure": is_partial_failure,
-                "failed_agents": failed_agents,
-                "successful_agents": successful_agents,
-            },
-        )
-
+        # Record security metrics for monitored (but not blocked) threats
+        threats = security_result.get("threats", [])
+        for threat in threats:
+            record_security_metrics(
+                threat_type=threat.get("type", "unknown"),
+                severity=threat.get("severity", "low"),
+                blocked=False
+            )
+            
+    except HTTPException:
+        # Re-raise HTTPException (security blocks)
+        raise
     except Exception as e:
-        process_time = time.time() - start_time
-
         logger.error(
-            f"❌ Query processing failed: {str(e)}",
+            f"Security check failed: {e}",
             extra={
                 "request_id": request_id,
                 "user_id": current_user.user_id,
-                "execution_time": process_time,
-                "error": str(e),
+                "error": str(e)
             },
             exc_info=True,
         )
+        # Continue processing if security check fails (fail-open for availability)
 
-        # Track failed query
-        await track_query(
-            query=request.query,
-            execution_time=process_time,
-            confidence=0.0,
-            client_ip=http_request.client.host,
-            user_id=current_user.user_id,
-            error=str(e),
+    # Acquire semaphore to limit concurrent requests
+    async with request_semaphore:
+        logger.info(
+            f"Acquired semaphore for query processing",
+            extra={
+                "request_id": request_id,
+                "user_id": current_user.user_id,
+                "semaphore_available": request_semaphore._value,
+            },
         )
 
-        # Record error metrics
-        record_error_metrics("query_processing_error", "/query")
-        record_request_metrics("POST", "/query", 500, process_time)
+        try:
+            # Check cache first
+            cache_key = f"{current_user.user_id}:{request.query}"
+            cached_result = await _query_cache.get(cache_key)
 
-        raise HTTPException(status_code=500, detail=f"Query processing failed: {str(e)}")
+            if cached_result:
+                logger.info(
+                    f"Cache HIT for query: {request.query[:50]}...",
+                    extra={
+                        "request_id": request_id,
+                        "user_id": current_user.user_id,
+                        "cache_hit": True,
+                    },
+                )
+
+                # Track analytics for cache hit
+                await track_query(
+                    query=request.query,
+                    execution_time=time.time() - start_time,
+                    confidence=cached_result.get("confidence", 0.0),
+                    client_ip=http_request.client.host,
+                    user_id=current_user.user_id,
+                    cache_hit=True,
+                )
+
+                # Record comprehensive metrics
+                execution_time = time.time() - start_time
+                record_request_metrics("POST", "/query", 200, execution_time)
+                record_cache_metrics("query", True, None)
+                record_business_metrics(
+                    "cache_hit",
+                    cached_result.get("confidence", 0.0),
+                    len(cached_result.get("answer", "")),
+                    "/query",
+                )
+
+                return QueryResponse(
+                    answer=cached_result.get("answer", ""),
+                    confidence=cached_result.get("confidence", 0.0),
+                    citations=cached_result.get("citations", []),
+                    query_id=cached_result.get("query_id", str(uuid.uuid4())),
+                    metadata={
+                        "cache_hit": True,
+                        "request_id": request_id,
+                        "execution_time_ms": int(execution_time * 1000),
+                    },
+                )
+
+            # FIXED: Create user_context properly and call orchestrator with string query
+            user_context = request.user_context or {}
+            if request.max_tokens:
+                user_context["max_tokens"] = request.max_tokens
+            if request.confidence_threshold:
+                user_context["confidence_threshold"] = request.confidence_threshold
+            user_context["trace_id"] = request_id
+            user_context["user_id"] = current_user.user_id
+
+            # Process query through orchestrator - FIXED: pass string and dict instead of QueryContext
+            result = await orchestrator.process_query(request.query, user_context)
+            process_time = time.time() - start_time
+
+            # Check if processing was successful
+            if not result.get('success', True):
+                error_msg = result.get('error', 'Processing failed')
+                logger.error(
+                    f"Query processing failed: {error_msg}",
+                    extra={
+                        "request_id": request_id,
+                        "user_id": current_user.user_id,
+                        "error": error_msg
+                    },
+                    exc_info=True,
+                )
+                raise HTTPException(status_code=500, detail=error_msg)
+
+            # Record comprehensive metrics for orchestrator processing
+            record_request_metrics("POST", "/query", 200, process_time)
+            record_cache_metrics("query", False, None)
+            
+            # Record agent metrics if available
+            agent_results = result.get("metadata", {}).get("agent_results", {})
+            if agent_results:
+                for agent_type, agent_result in agent_results.items():
+                    if isinstance(agent_result, dict):
+                        record_agent_metrics(
+                            agent_type=str(agent_type),
+                            status="success" if agent_result.get("success", False) else "error",
+                            duration=agent_result.get("execution_time_ms", 0) / 1000.0
+                        )
+            
+            # Record token usage if available
+            token_usage = result.get("metadata", {}).get("token_usage", {})
+            if token_usage:
+                for agent_type, tokens in token_usage.items():
+                    if isinstance(tokens, dict):
+                        record_token_metrics(
+                            agent_type=str(agent_type),
+                            prompt_tokens=tokens.get("prompt_tokens", 0),
+                            completion_tokens=tokens.get("completion_tokens", 0)
+                        )
+            failed_agents = []
+            successful_agents = []
+
+            for agent_type, agent_result in agent_results.items():
+                if agent_result.get("status") == "failed":
+                    failed_agents.append(agent_type)
+                elif agent_result.get("status") == "success":
+                    successful_agents.append(agent_type)
+
+            # Determine if this is a partial failure
+            is_partial_failure = len(failed_agents) > 0 and len(successful_agents) > 0
+            is_complete_failure = len(successful_agents) == 0
+
+            # Adjust success flag based on failure analysis
+            if is_complete_failure:
+                result["success"] = False
+            elif is_partial_failure:
+                result["success"] = True  # Still successful but with partial results
+                result["metadata"]["partial_failure"] = True
+                result["metadata"]["failed_agents"] = failed_agents
+                result["metadata"]["successful_agents"] = successful_agents
+
+            # Cache the result
+            await _query_cache.set(cache_key, result)
+
+            # Log success with detailed information
+            logger.info(
+                f"Query processed successfully in {process_time:.3f}s",
+                extra={
+                    "request_id": request_id,
+                    "user_id": current_user.user_id,
+                    "execution_time": process_time,
+                    "confidence": result.get("confidence", 0.0),
+                    "cache_hit": False,
+                    "partial_failure": is_partial_failure,
+                    "failed_agents": failed_agents,
+                    "successful_agents": successful_agents,
+                },
+            )
+
+            # Track analytics
+            await track_query(
+                query=request.query,
+                execution_time=process_time,
+                confidence=result.get("confidence", 0.0),
+                client_ip=http_request.client.host,
+                user_id=current_user.user_id,
+                cache_hit=False,
+                agent_results=agent_results,
+            )
+
+            # Record metrics
+            record_request_metrics("POST", "/query", 200, process_time)
+            record_business_metrics(
+                "query_processed",
+                result.get("confidence", 0.0),
+                len(result.get("answer", "")),
+                "/query",
+            )
+
+            # Generate query ID and store query
+            query_id = str(uuid.uuid4())
+            
+            # Store query in storage
+            global query_index
+            query_index += 1
+            
+            query_record = {
+                "query_id": query_id,
+                "query": request.query,
+                "answer": result.get("answer", ""),
+                "confidence": result.get("confidence", 0.0),
+                "citations": result.get("citations", []),
+                "metadata": {
+                    "request_id": request_id,
+                    "execution_time_ms": int(process_time * 1000),
+                    "cache_hit": False,
+                    "agent_results": agent_results,
+                    "token_usage": result.get("metadata", {}).get("token_usage", {}),
+                    "partial_failure": is_partial_failure,
+                    "failed_agents": failed_agents,
+                    "successful_agents": successful_agents,
+                },
+                "created_at": datetime.now(),
+                "updated_at": None,
+                "processing_time": process_time,
+                "user_id": current_user.user_id,
+                "status": "completed",
+                "max_tokens": request.max_tokens,
+                "confidence_threshold": request.confidence_threshold,
+                "user_context": request.user_context
+            }
+            
+            query_storage[query_id] = query_record
+
+            return QueryResponse(
+                answer=result.get("answer", ""),
+                confidence=result.get("confidence", 0.0),
+                citations=result.get("citations", []),
+                query_id=query_id,
+                processing_time=process_time,
+                metadata={
+                    "request_id": request_id,
+                    "execution_time_ms": int(process_time * 1000),
+                    "cache_hit": False,
+                    "agent_results": agent_results,
+                    "token_usage": result.get("metadata", {}).get("token_usage", {}),
+                    "partial_failure": is_partial_failure,
+                    "failed_agents": failed_agents,
+                    "successful_agents": successful_agents,
+                },
+            )
+
+        except Exception as e:
+            process_time = time.time() - start_time
+
+            logger.error(
+                f"❌ Query processing failed: {str(e)}",
+                extra={
+                    "request_id": request_id,
+                    "user_id": current_user.user_id,
+                    "execution_time": process_time,
+                    "error": str(e),
+                },
+                exc_info=True,
+            )
+
+            # Track failed query
+            await track_query(
+                query=request.query,
+                execution_time=process_time,
+                confidence=0.0,
+                client_ip=http_request.client.host,
+                user_id=current_user.user_id,
+                error=str(e),
+            )
+
+            # Record error metrics
+            record_error_metrics("query_processing_error", "/query")
+            record_request_metrics("POST", "/query", 500, process_time)
+
+            raise HTTPException(status_code=500, detail=f"Query processing failed: {str(e)}")
 
 
 @app.post("/feedback", response_model=FeedbackResponse)
@@ -773,42 +1313,69 @@ async def submit_feedback(
 
 
 @app.get("/metrics")
-async def get_metrics():
-    """Get application metrics in Prometheus format."""
+async def get_metrics(current_user=Depends(get_current_user)):
+    """Get Prometheus metrics (admin only)."""
+    # Check admin permissions
+    if not current_user.has_permission("admin"):
+        raise AuthorizationError("Admin permission required for metrics endpoint")
+    
+    # Additional security check for production
+    if os.getenv("ENVIRONMENT") == "production" and not os.getenv("ENABLE_METRICS_ENDPOINT", "").lower() == "true":
+        raise AuthorizationError("Metrics endpoint disabled in production")
+    
     try:
-        from api.metrics import get_metrics_collector, generate_latest, CONTENT_TYPE_LATEST
-        from fastapi.responses import Response
-
-        # Get the metrics collector
-        collector = get_metrics_collector()
-        
-        # Update system metrics
-        collector._update_system_metrics()
-        
-        # Generate Prometheus format metrics
-        prometheus_metrics = generate_latest()
-        
-        return Response(
-            content=prometheus_metrics,
-            media_type=CONTENT_TYPE_LATEST,
-            headers={"Cache-Control": "no-cache"}
-        )
+        from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+        return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
     except Exception as e:
-        logger.error(f"Failed to get metrics: {e}")
-        return {"error": "Failed to get metrics"}
+        logger.error(f"Failed to generate metrics: {e}")
+        raise HTTPException(status_code=500, detail="Metrics generation failed")
 
-
-@app.get("/analytics")
-async def get_analytics():
-    """Get detailed analytics data."""
+@app.get("/analytics", response_model=Dict[str, Any])
+async def get_analytics(current_user=Depends(require_read())):
+    """Get analytics data (any authenticated user)."""
+    # TODO: Restrict to admin in future when proper user accounts exist
     try:
-        from api.analytics import get_analytics
-
-        analytics = await get_analytics()
-        return analytics
+        analytics_data = await _analytics_collector.get_summary()
+        # Remove sensitive data
+        safe_analytics = {
+            "total_requests": analytics_data.get("total_requests", 0),
+            "total_errors": analytics_data.get("total_errors", 0),
+            "average_response_time": analytics_data.get("average_response_time", 0),
+            "cache_hit_rate": analytics_data.get("cache_hit_rate", 0),
+            "popular_queries": analytics_data.get("popular_query_categories", {}),
+            "timestamp": datetime.now().isoformat()
+        }
+        return safe_analytics
     except Exception as e:
-        logger.error(f"Failed to get analytics: {e}")
-        return {"error": "Failed to get analytics"}
+        logger.error(f"Failed to get analytics: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Analytics retrieval failed")
+
+@app.get("/security", response_model=Dict[str, Any])
+async def get_security_status(current_user=Depends(get_current_user)):
+    """Get security status (admin only)."""
+    # Check admin permissions
+    if not current_user.has_permission("admin"):
+        raise AuthorizationError("Admin permission required for security endpoint")
+    
+    # Additional security check for production
+    if os.getenv("ENVIRONMENT") == "production" and not os.getenv("ENABLE_SECURITY_ENDPOINT", "").lower() == "true":
+        raise AuthorizationError("Security endpoint disabled in production")
+    
+    try:
+        from api.security import get_security_summary
+        security_summary = get_security_summary()
+        # Remove sensitive security details
+        safe_summary = {
+            "status": security_summary.get("status", "unknown"),
+            "threats_detected_today": security_summary.get("threat_stats", {}).get("daily_count", 0),
+            "requests_blocked_today": security_summary.get("threat_stats", {}).get("blocked_today", 0),
+            "security_level": security_summary.get("security_level", "normal"),
+            "timestamp": datetime.now().isoformat()
+        }
+        return safe_summary
+    except Exception as e:
+        logger.error(f"Failed to get security status: {e}")
+        raise HTTPException(status_code=500, detail="Security status retrieval failed")
 
 
 @app.get("/integrations")

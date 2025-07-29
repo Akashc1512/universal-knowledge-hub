@@ -827,6 +827,92 @@ class CacheManager:
         stats["total"] = stats["total"].to_dict()
         return stats
 
+    async def cleanup_expired_entries(self) -> int:
+        """
+        Clean up expired entries from all backends.
+        
+        Returns:
+            Number of entries cleaned up
+        """
+        total_cleaned = 0
+        
+        for i, backend in enumerate(self.backends):
+            if not self._is_backend_healthy(i):
+                continue
+                
+            try:
+                if hasattr(backend, 'cleanup_expired'):
+                    cleaned = await backend.cleanup_expired()
+                    total_cleaned += cleaned
+                    logger.debug(f"Cleaned {cleaned} expired entries from backend {i}")
+                    
+            except Exception as e:
+                logger.error(f"Error cleaning backend {i}: {e}")
+                
+        return total_cleaned
+    
+    async def get_memory_usage(self) -> Dict[str, Any]:
+        """
+        Get memory usage statistics for all backends.
+        
+        Returns:
+            Memory usage information
+        """
+        memory_info = {
+            "backends": [],
+            "total_size_bytes": 0,
+            "total_entries": 0
+        }
+        
+        for i, backend in enumerate(self.backends):
+            backend_info = {
+                "index": i,
+                "type": type(backend).__name__,
+                "size_bytes": 0,
+                "entries": 0
+            }
+            
+            try:
+                if hasattr(backend, 'get_memory_usage'):
+                    usage = await backend.get_memory_usage()
+                    backend_info.update(usage)
+                    memory_info["total_size_bytes"] += usage.get("size_bytes", 0)
+                    memory_info["total_entries"] += usage.get("entries", 0)
+                    
+            except Exception as e:
+                logger.warning(f"Could not get memory usage for backend {i}: {e}")
+                
+            memory_info["backends"].append(backend_info)
+            
+        return memory_info
+    
+    async def evict_lru_entries(self, target_reduction_percent: float = 0.1) -> int:
+        """
+        Evict least recently used entries to reduce memory usage.
+        
+        Args:
+            target_reduction_percent: Percentage of entries to evict (0.0-1.0)
+            
+        Returns:
+            Number of entries evicted
+        """
+        total_evicted = 0
+        
+        for i, backend in enumerate(self.backends):
+            if not self._is_backend_healthy(i):
+                continue
+                
+            try:
+                if hasattr(backend, 'evict_lru'):
+                    evicted = await backend.evict_lru(target_reduction_percent)
+                    total_evicted += evicted
+                    logger.info(f"Evicted {evicted} LRU entries from backend {i}")
+                    
+            except Exception as e:
+                logger.error(f"Error evicting from backend {i}: {e}")
+                
+        return total_evicted
+
 # Decorators
 def cache_response(
     ttl: Optional[int] = None,

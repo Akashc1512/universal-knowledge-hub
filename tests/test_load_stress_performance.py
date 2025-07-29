@@ -38,6 +38,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from agents.base_agent import BaseAgent, AgentType, QueryContext
 from agents.lead_orchestrator import LeadOrchestrator
 from api.main import app
+from api.cache import CacheManager
 
 # Test configuration with environment variables
 LOAD_TEST_CONFIG = {
@@ -387,18 +388,22 @@ class TestCachePerformance(unittest.TestCase):
 
     def setUp(self):
         """Set up test environment"""
-        self.cache = QueryCache()  # Changed from CacheService
+        self.cache = CacheManager()  # Changed from QueryCache
 
-    def test_cache_under_load(self):
+    @pytest.mark.asyncio
+    async def test_cache_under_load(self):
         """Test cache performance under high load"""
         print("🧪 Testing cache performance under load")
+
+        # Initialize cache
+        await self.cache.initialize()
 
         # Generate cache keys
         cache_keys = [f"test_key_{i}" for i in range(1000)]
         cache_values = [f"test_value_{i}" for i in range(1000)]
 
         # Concurrent cache operations
-        def cache_worker(worker_id: int):
+        async def cache_worker(worker_id: int):
             """Worker for cache operations"""
             results = []
             for i in range(100):
@@ -407,12 +412,12 @@ class TestCachePerformance(unittest.TestCase):
 
                 # Set value
                 start_time = time.time()
-                self.cache.set(key, value, ttl=60)
+                await self.cache.set(key, value, ttl=60)
                 set_time = time.time() - start_time
 
                 # Get value
                 start_time = time.time()
-                retrieved = self.cache.get(key)
+                retrieved = await self.cache.get(key)
                 get_time = time.time() - start_time
 
                 results.append(
@@ -426,9 +431,8 @@ class TestCachePerformance(unittest.TestCase):
             return results
 
         # Run concurrent cache operations
-        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-            futures = [executor.submit(cache_worker, i) for i in range(10)]
-            all_results = [future.result() for future in concurrent.futures.as_completed(futures)]
+        tasks = [cache_worker(i) for i in range(10)]
+        all_results = await asyncio.gather(*tasks)
 
         # Flatten results
         all_operations = []

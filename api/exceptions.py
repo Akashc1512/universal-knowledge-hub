@@ -1,806 +1,263 @@
 """
-Exception Handling Module - MAANG Standards.
-
-This module implements a comprehensive exception hierarchy following MAANG
-best practices for error handling, logging, and client communication.
-
-Features:
-    - Structured exception hierarchy
-    - Detailed error context
-    - Correlation IDs for tracing
-    - Client-safe error messages
-    - Automatic logging integration
-    - Retry hints for transient errors
-    - Internationalization support
-
-Authors:
-    - Universal Knowledge Platform Engineering Team
-    
-Version:
-    2.0.0 (2024-12-28)
+Custom exceptions for the Universal Knowledge Platform.
+Provides granular error handling and secure error messages.
 """
 
-import sys
-import traceback
-from typing import Optional, Dict, Any, List, Union, Type
-from datetime import datetime, timezone
-from enum import Enum
-import structlog
+import logging
+from typing import Optional, Dict, Any
+from fastapi import HTTPException, status
 
-logger = structlog.get_logger(__name__)
 
-# Error categories
-class ErrorCategory(str, Enum):
-    """Error categories for classification and handling."""
-    VALIDATION = "validation"
-    AUTHENTICATION = "authentication"
-    AUTHORIZATION = "authorization"
-    NOT_FOUND = "not_found"
-    CONFLICT = "conflict"
-    RATE_LIMIT = "rate_limit"
-    EXTERNAL_SERVICE = "external_service"
-    DATABASE = "database"
-    INTERNAL = "internal"
-    CONFIGURATION = "configuration"
+logger = logging.getLogger(__name__)
 
-# Error severity
-class ErrorSeverity(str, Enum):
-    """Error severity levels for monitoring and alerting."""
-    LOW = "low"          # User error, expected
-    MEDIUM = "medium"    # System issue, degraded service
-    HIGH = "high"        # Critical issue, immediate attention
-    CRITICAL = "critical" # System failure, page immediately
 
-class ErrorCode(str, Enum):
-    """Standardized error codes for client handling."""
-    # Validation errors (1000-1999)
-    INVALID_INPUT = "E1001"
-    MISSING_FIELD = "E1002"
-    INVALID_FORMAT = "E1003"
-    VALUE_OUT_OF_RANGE = "E1004"
-    DUPLICATE_VALUE = "E1005"
+# Base exceptions
+class UKPException(Exception):
+    """Base exception for Universal Knowledge Platform."""
     
-    # Authentication errors (2000-2999)
-    INVALID_CREDENTIALS = "E2001"
-    TOKEN_EXPIRED = "E2002"
-    TOKEN_INVALID = "E2003"
-    ACCOUNT_LOCKED = "E2004"
-    ACCOUNT_DISABLED = "E2005"
-    TWO_FACTOR_REQUIRED = "E2006"
-    TWO_FACTOR_FAILED = "E2007"
-    
-    # Authorization errors (3000-3999)
-    INSUFFICIENT_PERMISSIONS = "E3001"
-    RESOURCE_ACCESS_DENIED = "E3002"
-    OPERATION_NOT_ALLOWED = "E3003"
-    SUBSCRIPTION_REQUIRED = "E3004"
-    
-    # Resource errors (4000-4999)
-    RESOURCE_NOT_FOUND = "E4001"
-    RESOURCE_ALREADY_EXISTS = "E4002"
-    RESOURCE_CONFLICT = "E4003"
-    RESOURCE_LOCKED = "E4004"
-    
-    # Rate limiting errors (5000-5999)
-    RATE_LIMIT_EXCEEDED = "E5001"
-    QUOTA_EXCEEDED = "E5002"
-    
-    # External service errors (6000-6999)
-    SERVICE_UNAVAILABLE = "E6001"
-    SERVICE_TIMEOUT = "E6002"
-    SERVICE_ERROR = "E6003"
-    
-    # Database errors (7000-7999)
-    DATABASE_CONNECTION_FAILED = "E7001"
-    DATABASE_QUERY_FAILED = "E7002"
-    DATABASE_CONSTRAINT_VIOLATION = "E7003"
-    DATABASE_DEADLOCK = "E7004"
-    
-    # Internal errors (9000-9999)
-    INTERNAL_ERROR = "E9001"
-    CONFIGURATION_ERROR = "E9002"
-    UNHANDLED_ERROR = "E9999"
-
-class BaseError(Exception):
-    """
-    Base exception class for all application errors.
-    
-    Provides structured error information with context, tracing,
-    and client-safe messages.
-    """
-    
-    # Default attributes
-    category: ErrorCategory = ErrorCategory.INTERNAL
-    severity: ErrorSeverity = ErrorSeverity.MEDIUM
-    error_code: ErrorCode = ErrorCode.INTERNAL_ERROR
-    status_code: int = 500
-    retryable: bool = False
-    
-    def __init__(
-        self,
-        message: str,
-        *,
-        details: Optional[Dict[str, Any]] = None,
-        cause: Optional[Exception] = None,
-        correlation_id: Optional[str] = None,
-        user_message: Optional[str] = None,
-        retry_after: Optional[int] = None,
-        help_url: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None
-    ) -> None:
-        """
-        Initialize base error with comprehensive context.
-        
-        Args:
-            message: Internal error message (not shown to users)
-            details: Additional error details
-            cause: Original exception that caused this error
-            correlation_id: Request correlation ID for tracing
-            user_message: Safe message to show to end users
-            retry_after: Seconds to wait before retry (if retryable)
-            help_url: URL to documentation or help
-            metadata: Additional metadata for logging
-        """
-        super().__init__(message)
-        
+    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
         self.message = message
         self.details = details or {}
-        self.cause = cause
-        self.correlation_id = correlation_id
-        self.user_message = user_message or self._get_default_user_message()
-        self.retry_after = retry_after
-        self.help_url = help_url
-        self.metadata = metadata or {}
-        self.timestamp = datetime.now(timezone.utc)
-        
-        # Capture stack trace
-        self.traceback = traceback.format_exc()
-        
-        # Log error
-        self._log_error()
-    
-    def _get_default_user_message(self) -> str:
-        """Get default user-friendly message based on category."""
-        messages = {
-            ErrorCategory.VALIDATION: "The provided data is invalid.",
-            ErrorCategory.AUTHENTICATION: "Authentication failed.",
-            ErrorCategory.AUTHORIZATION: "You don't have permission to perform this action.",
-            ErrorCategory.NOT_FOUND: "The requested resource was not found.",
-            ErrorCategory.CONFLICT: "The request conflicts with the current state.",
-            ErrorCategory.RATE_LIMIT: "Too many requests. Please try again later.",
-            ErrorCategory.EXTERNAL_SERVICE: "An external service is temporarily unavailable.",
-            ErrorCategory.DATABASE: "A database error occurred.",
-            ErrorCategory.INTERNAL: "An internal error occurred.",
-            ErrorCategory.CONFIGURATION: "The system is misconfigured.",
-        }
-        return messages.get(self.category, "An error occurred.")
-    
-    def _log_error(self) -> None:
-        """Log error with appropriate level based on severity."""
-        log_data = {
-            "error_type": self.__class__.__name__,
-            "error_code": self.error_code.value,
-            "category": self.category.value,
-            "severity": self.severity.value,
-            "message": self.message,
-            "details": self.details,
-            "correlation_id": self.correlation_id,
-            "retryable": self.retryable,
-            "status_code": self.status_code,
-        }
-        
-        if self.cause:
-            log_data["cause"] = str(self.cause)
-            log_data["cause_type"] = type(self.cause).__name__
-        
-        if self.metadata:
-            log_data["metadata"] = self.metadata
-        
-        # Log based on severity
-        if self.severity == ErrorSeverity.CRITICAL:
-            logger.critical("Critical error occurred", **log_data)
-        elif self.severity == ErrorSeverity.HIGH:
-            logger.error("High severity error occurred", **log_data)
-        elif self.severity == ErrorSeverity.MEDIUM:
-            logger.warning("Medium severity error occurred", **log_data)
-        else:
-            logger.info("Low severity error occurred", **log_data)
-    
-    def to_dict(self) -> Dict[str, Any]:
-        """
-        Convert error to dictionary for API responses.
-        
-        Returns:
-            Client-safe error representation
-        """
-        error_dict = {
-            "error": {
-                "code": self.error_code.value,
-                "message": self.user_message,
-                "category": self.category.value,
-                "timestamp": self.timestamp.isoformat(),
-            }
-        }
-        
-        # Add optional fields
-        if self.correlation_id:
-            error_dict["error"]["correlation_id"] = self.correlation_id
-        
-        if self.details:
-            # Filter sensitive information
-            safe_details = self._filter_sensitive_details(self.details)
-            if safe_details:
-                error_dict["error"]["details"] = safe_details
-        
-        if self.retryable:
-            error_dict["error"]["retryable"] = True
-            if self.retry_after:
-                error_dict["error"]["retry_after"] = self.retry_after
-        
-        if self.help_url:
-            error_dict["error"]["help_url"] = self.help_url
-        
-        return error_dict
-    
-    def _filter_sensitive_details(self, details: Dict[str, Any]) -> Dict[str, Any]:
-        """Filter out sensitive information from details."""
-        sensitive_keys = {
-            'password', 'token', 'secret', 'key', 'authorization',
-            'cookie', 'session', 'credit_card', 'ssn', 'api_key'
-        }
-        
-        filtered = {}
-        for key, value in details.items():
-            if any(sensitive in key.lower() for sensitive in sensitive_keys):
-                filtered[key] = "[REDACTED]"
-            elif isinstance(value, dict):
-                filtered[key] = self._filter_sensitive_details(value)
-            else:
-                filtered[key] = value
-        
-        return filtered
-    
-    def with_metadata(self, **kwargs: Any) -> 'BaseError':
-        """Add metadata to error (fluent interface)."""
-        self.metadata.update(kwargs)
-        return self
-    
-    def __str__(self) -> str:
-        """String representation."""
-        return f"{self.__class__.__name__}({self.error_code.value}): {self.message}"
-    
-    def __repr__(self) -> str:
-        """Detailed representation."""
-        return (
-            f"{self.__class__.__name__}("
-            f"code={self.error_code.value}, "
-            f"message={self.message!r}, "
-            f"details={self.details!r})"
-        )
+        super().__init__(self.message)
 
-# Validation Errors
-class ValidationError(BaseError):
-    """Raised when input validation fails."""
-    
-    category = ErrorCategory.VALIDATION
-    severity = ErrorSeverity.LOW
-    error_code = ErrorCode.INVALID_INPUT
-    status_code = 422
+
+class UKPHTTPException(HTTPException):
+    """Base HTTP exception with logging and secure error messages."""
     
     def __init__(
         self,
-        message: str,
-        *,
-        field: Optional[str] = None,
-        value: Optional[Any] = None,
-        constraints: Optional[Dict[str, Any]] = None,
-        **kwargs: Any
-    ) -> None:
-        """
-        Initialize validation error.
+        status_code: int,
+        detail: str,
+        internal_message: Optional[str] = None,
+        headers: Optional[Dict[str, str]] = None
+    ):
+        self.internal_message = internal_message or detail
+        super().__init__(status_code=status_code, detail=detail, headers=headers)
         
-        Args:
-            message: Error message
-            field: Field that failed validation
-            value: Invalid value (will be sanitized)
-            constraints: Validation constraints that failed
-            **kwargs: Additional arguments for BaseError
-        """
-        details = kwargs.pop('details', {})
-        
-        if field:
-            details['field'] = field
-        if value is not None:
-            details['value'] = self._sanitize_value(value)
-        if constraints:
-            details['constraints'] = constraints
-        
-        super().__init__(message, details=details, **kwargs)
-    
-    def _sanitize_value(self, value: Any) -> Any:
-        """Sanitize value to prevent sensitive data exposure."""
-        if isinstance(value, str) and len(value) > 100:
-            return value[:100] + "..."
-        return value
+        # Log internal details
+        logger.error(f"HTTP {status_code}: {self.internal_message}")
 
-class MissingFieldError(ValidationError):
-    """Raised when a required field is missing."""
-    
-    error_code = ErrorCode.MISSING_FIELD
-    
-    def __init__(self, field: str, **kwargs: Any) -> None:
-        message = f"Required field '{field}' is missing"
-        super().__init__(message, field=field, **kwargs)
 
-class InvalidFormatError(ValidationError):
-    """Raised when a field has invalid format."""
+# Authentication and Authorization exceptions
+class AuthenticationError(UKPHTTPException):
+    """Authentication failed."""
     
-    error_code = ErrorCode.INVALID_FORMAT
-    
-    def __init__(
-        self,
-        field: str,
-        expected_format: str,
-        actual_value: Optional[str] = None,
-        **kwargs: Any
-    ) -> None:
-        message = f"Field '{field}' has invalid format. Expected: {expected_format}"
+    def __init__(self, internal_message: Optional[str] = None):
         super().__init__(
-            message,
-            field=field,
-            value=actual_value,
-            constraints={"format": expected_format},
-            **kwargs
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required",
+            internal_message=internal_message or "Authentication failed"
         )
 
-# Authentication Errors
-class AuthenticationError(BaseError):
-    """Base class for authentication errors."""
-    
-    category = ErrorCategory.AUTHENTICATION
-    severity = ErrorSeverity.LOW
-    error_code = ErrorCode.INVALID_CREDENTIALS
-    status_code = 401
 
-class InvalidCredentialsError(AuthenticationError):
-    """Raised when credentials are invalid."""
+class AuthorizationError(UKPHTTPException):
+    """Insufficient permissions."""
     
-    def __init__(self, **kwargs: Any) -> None:
+    def __init__(self, internal_message: Optional[str] = None):
         super().__init__(
-            "Invalid username or password",
-            user_message="The username or password you entered is incorrect.",
-            **kwargs
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Insufficient permissions",
+            internal_message=internal_message or "Authorization failed"
         )
 
-class TokenExpiredError(AuthenticationError):
-    """Raised when a token has expired."""
+
+class InvalidAPIKeyError(AuthenticationError):
+    """Invalid API key provided."""
     
-    error_code = ErrorCode.TOKEN_EXPIRED
+    def __init__(self, api_key_hint: Optional[str] = None):
+        internal_msg = f"Invalid API key: {api_key_hint}" if api_key_hint else "Invalid API key"
+        super().__init__(internal_message=internal_msg)
+
+
+class RateLimitExceededError(UKPHTTPException):
+    """Rate limit exceeded."""
     
-    def __init__(self, token_type: str = "access", **kwargs: Any) -> None:
+    def __init__(self, limit: int, window: str, retry_after: Optional[int] = None):
+        headers = {"Retry-After": str(retry_after)} if retry_after else None
         super().__init__(
-            f"{token_type.capitalize()} token has expired",
-            user_message=f"Your {token_type} token has expired. Please login again.",
-            **kwargs
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Rate limit exceeded: {limit} requests per {window}",
+            internal_message=f"Rate limit exceeded: {limit}/{window}",
+            headers=headers
         )
 
-class AccountLockedException(AuthenticationError):
-    """Raised when account is locked."""
+
+# Agent and processing exceptions
+class AgentError(UKPException):
+    """Base exception for agent errors."""
     
-    error_code = ErrorCode.ACCOUNT_LOCKED
+    def __init__(self, agent_type: str, message: str, details: Optional[Dict[str, Any]] = None):
+        self.agent_type = agent_type
+        super().__init__(message, details)
+
+
+class AgentTimeoutError(AgentError):
+    """Agent processing timeout."""
     
-    def __init__(
-        self,
-        locked_until: Optional[datetime] = None,
-        reason: str = "too many failed login attempts",
-        **kwargs: Any
-    ) -> None:
-        details = {"reason": reason}
-        if locked_until:
-            details["locked_until"] = locked_until.isoformat()
-            retry_after = int((locked_until - datetime.now(timezone.utc)).total_seconds())
-            kwargs["retry_after"] = max(retry_after, 0)
-        
+    def __init__(self, agent_type: str, timeout_seconds: int):
         super().__init__(
-            f"Account is locked due to {reason}",
-            details=details,
-            user_message="Your account has been temporarily locked. Please try again later.",
-            **kwargs
+            agent_type=agent_type,
+            message=f"Agent {agent_type} timed out after {timeout_seconds} seconds",
+            details={"timeout_seconds": timeout_seconds}
         )
 
-# Authorization Errors
-class AuthorizationError(BaseError):
-    """Base class for authorization errors."""
-    
-    category = ErrorCategory.AUTHORIZATION
-    severity = ErrorSeverity.LOW
-    error_code = ErrorCode.INSUFFICIENT_PERMISSIONS
-    status_code = 403
 
-class InsufficientPermissionsError(AuthorizationError):
-    """Raised when user lacks required permissions."""
+class AgentProcessingError(AgentError):
+    """Agent processing failed."""
     
-    def __init__(
-        self,
-        required_permission: str,
-        user_permissions: Optional[List[str]] = None,
-        **kwargs: Any
-    ) -> None:
-        details = {"required_permission": required_permission}
-        if user_permissions:
-            details["user_permissions"] = user_permissions
-        
+    def __init__(self, agent_type: str, error_message: str, recoverable: bool = True):
         super().__init__(
-            f"User lacks required permission: {required_permission}",
-            details=details,
-            user_message="You don't have permission to perform this action.",
-            **kwargs
+            agent_type=agent_type,
+            message=f"Agent {agent_type} processing failed: {error_message}",
+            details={"recoverable": recoverable, "error": error_message}
         )
 
-# Resource Errors
-class NotFoundError(BaseError):
-    """Raised when a resource is not found."""
+
+class QueryProcessingError(UKPHTTPException):
+    """Query processing failed."""
     
-    category = ErrorCategory.NOT_FOUND
-    severity = ErrorSeverity.LOW
-    error_code = ErrorCode.RESOURCE_NOT_FOUND
-    status_code = 404
-    
-    def __init__(
-        self,
-        resource_type: str,
-        resource_id: Optional[Union[str, int]] = None,
-        **kwargs: Any
-    ) -> None:
-        details = {"resource_type": resource_type}
-        if resource_id:
-            details["resource_id"] = str(resource_id)
-        
-        message = f"{resource_type} not found"
-        if resource_id:
-            message += f": {resource_id}"
-        
+    def __init__(self, query_id: str, internal_error: str, recoverable: bool = True):
+        detail = "Query processing failed" if recoverable else "Query processing failed permanently"
         super().__init__(
-            message,
-            details=details,
-            user_message=f"The requested {resource_type.lower()} was not found.",
-            **kwargs
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR if not recoverable else status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=detail,
+            internal_message=f"Query {query_id} failed: {internal_error}"
         )
 
-class ConflictError(BaseError):
-    """Raised when a request conflicts with current state."""
-    
-    category = ErrorCategory.CONFLICT
-    severity = ErrorSeverity.LOW
-    error_code = ErrorCode.RESOURCE_CONFLICT
-    status_code = 409
-    
-    def __init__(
-        self,
-        message: str,
-        *,
-        conflicting_resource: Optional[str] = None,
-        current_state: Optional[Dict[str, Any]] = None,
-        **kwargs: Any
-    ) -> None:
-        details = kwargs.pop('details', {})
-        
-        if conflicting_resource:
-            details['conflicting_resource'] = conflicting_resource
-        if current_state:
-            details['current_state'] = current_state
-        
-        super().__init__(message, details=details, **kwargs)
 
-class DuplicateResourceError(ConflictError):
-    """Raised when attempting to create a duplicate resource."""
+# Resource and infrastructure exceptions
+class ResourceNotFoundError(UKPHTTPException):
+    """Requested resource not found."""
     
-    error_code = ErrorCode.RESOURCE_ALREADY_EXISTS
-    
-    def __init__(
-        self,
-        resource_type: str,
-        duplicate_field: str,
-        duplicate_value: Any,
-        **kwargs: Any
-    ) -> None:
+    def __init__(self, resource_type: str, resource_id: str):
         super().__init__(
-            f"{resource_type} already exists with {duplicate_field}: {duplicate_value}",
-            conflicting_resource=resource_type,
-            current_state={duplicate_field: duplicate_value},
-            user_message=f"A {resource_type.lower()} with this {duplicate_field} already exists.",
-            **kwargs
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"{resource_type} not found",
+            internal_message=f"{resource_type} {resource_id} not found"
         )
 
-# Rate Limiting Errors
-class RateLimitError(BaseError):
-    """Raised when rate limit is exceeded."""
+
+class DatabaseError(UKPException):
+    """Database operation failed."""
     
-    category = ErrorCategory.RATE_LIMIT
-    severity = ErrorSeverity.LOW
-    error_code = ErrorCode.RATE_LIMIT_EXCEEDED
-    status_code = 429
-    retryable = True
-    
-    def __init__(
-        self,
-        limit: int,
-        window: str,
-        retry_after: int,
-        **kwargs: Any
-    ) -> None:
+    def __init__(self, operation: str, error: str, database: str = "primary"):
         super().__init__(
-            f"Rate limit exceeded: {limit} requests per {window}",
-            details={
-                "limit": limit,
-                "window": window,
-                "retry_after": retry_after
-            },
-            retry_after=retry_after,
-            user_message=f"Too many requests. Please wait {retry_after} seconds before trying again.",
-            **kwargs
+            message=f"Database {operation} failed on {database}: {error}",
+            details={"operation": operation, "database": database, "error": error}
         )
 
-# External Service Errors
-class ExternalServiceError(BaseError):
-    """Base class for external service errors."""
-    
-    category = ErrorCategory.EXTERNAL_SERVICE
-    severity = ErrorSeverity.MEDIUM
-    error_code = ErrorCode.SERVICE_ERROR
-    status_code = 502
-    retryable = True
 
-class ServiceUnavailableError(ExternalServiceError):
-    """Raised when an external service is unavailable."""
+class CacheError(UKPException):
+    """Cache operation failed."""
     
-    error_code = ErrorCode.SERVICE_UNAVAILABLE
-    status_code = 503
+    def __init__(self, operation: str, cache_type: str, error: str):
+        super().__init__(
+            message=f"Cache {operation} failed on {cache_type}: {error}",
+            details={"operation": operation, "cache_type": cache_type, "error": error}
+        )
+
+
+class ExternalServiceError(UKPException):
+    """External service integration failed."""
     
-    def __init__(
-        self,
-        service_name: str,
-        reason: Optional[str] = None,
-        retry_after: Optional[int] = None,
-        **kwargs: Any
-    ) -> None:
-        details = {"service": service_name}
-        if reason:
-            details["reason"] = reason
-        
-        message = f"{service_name} is currently unavailable"
-        if reason:
-            message += f": {reason}"
+    def __init__(self, service: str, operation: str, error: str, retryable: bool = True):
+        super().__init__(
+            message=f"External service {service} failed during {operation}: {error}",
+            details={"service": service, "operation": operation, "retryable": retryable, "error": error}
+        )
+
+
+# Validation exceptions
+class ValidationError(UKPHTTPException):
+    """Request validation failed."""
+    
+    def __init__(self, field: str, message: str, value: Any = None):
+        super().__init__(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Validation error: {message}",
+            internal_message=f"Validation failed for {field}: {message} (value: {value})"
+        )
+
+
+class SecurityViolationError(UKPHTTPException):
+    """Security policy violation."""
+    
+    def __init__(self, violation_type: str, details: Optional[str] = None):
+        super().__init__(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Request blocked by security policy",
+            internal_message=f"Security violation: {violation_type} - {details or 'No details'}"
+        )
+
+
+# Alias for backwards compatibility
+SecurityError = SecurityViolationError
+RateLimitError = RateLimitExceededError
+
+
+# Configuration exceptions
+class ConfigurationError(UKPException):
+    """Configuration error."""
+    
+    def __init__(self, component: str, issue: str, suggestion: Optional[str] = None):
+        message = f"Configuration error in {component}: {issue}"
+        if suggestion:
+            message += f". Suggestion: {suggestion}"
         
         super().__init__(
-            message,
-            details=details,
-            retry_after=retry_after or 60,
-            user_message=f"The {service_name} service is temporarily unavailable. Please try again later.",
-            **kwargs
+            message=message,
+            details={"component": component, "issue": issue, "suggestion": suggestion}
         )
 
-class ServiceTimeoutError(ExternalServiceError):
-    """Raised when an external service times out."""
+
+# Expert review exceptions
+class ExpertReviewError(UKPHTTPException):
+    """Expert review operation failed."""
     
-    error_code = ErrorCode.SERVICE_TIMEOUT
-    status_code = 504
-    
-    def __init__(
-        self,
-        service_name: str,
-        timeout_seconds: float,
-        **kwargs: Any
-    ) -> None:
+    def __init__(self, operation: str, review_id: str, reason: str):
         super().__init__(
-            f"{service_name} request timed out after {timeout_seconds}s",
-            details={
-                "service": service_name,
-                "timeout_seconds": timeout_seconds
-            },
-            retry_after=30,
-            user_message=f"The request to {service_name} took too long. Please try again.",
-            **kwargs
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Expert review {operation} failed",
+            internal_message=f"Expert review {operation} failed for {review_id}: {reason}"
         )
 
-# Database Errors
-class DatabaseError(BaseError):
-    """Base class for database errors."""
-    
-    category = ErrorCategory.DATABASE
-    severity = ErrorSeverity.HIGH
-    error_code = ErrorCode.DATABASE_QUERY_FAILED
-    status_code = 500
-    retryable = True
 
-class DatabaseConnectionError(DatabaseError):
-    """Raised when database connection fails."""
-    
-    error_code = ErrorCode.DATABASE_CONNECTION_FAILED
-    severity = ErrorSeverity.CRITICAL
-    
-    def __init__(
-        self,
-        database_type: str = "database",
-        **kwargs: Any
-    ) -> None:
-        super().__init__(
-            f"Failed to connect to {database_type}",
-            user_message="Unable to connect to the database. Please try again later.",
-            **kwargs
-        )
+# Utility functions for error handling
+def handle_agent_error(agent_type: str, error: Exception) -> AgentError:
+    """Convert generic exceptions to agent-specific errors."""
+    if isinstance(error, AgentError):
+        return error
+    elif isinstance(error, TimeoutError):
+        return AgentTimeoutError(agent_type, 30)  # Default timeout
+    else:
+        return AgentProcessingError(agent_type, str(error), recoverable=True)
 
-class DatabaseConstraintError(DatabaseError):
-    """Raised when a database constraint is violated."""
-    
-    error_code = ErrorCode.DATABASE_CONSTRAINT_VIOLATION
-    severity = ErrorSeverity.LOW
-    status_code = 409
-    retryable = False
-    
-    def __init__(
-        self,
-        constraint_name: str,
-        constraint_type: str = "constraint",
-        **kwargs: Any
-    ) -> None:
-        super().__init__(
-            f"Database {constraint_type} violation: {constraint_name}",
-            details={
-                "constraint_name": constraint_name,
-                "constraint_type": constraint_type
-            },
-            user_message="The operation violates data integrity rules.",
-            **kwargs
-        )
 
-# Configuration Errors
-class ConfigurationError(BaseError):
-    """Raised when configuration is invalid."""
-    
-    category = ErrorCategory.CONFIGURATION
-    severity = ErrorSeverity.CRITICAL
-    error_code = ErrorCode.CONFIGURATION_ERROR
-    status_code = 500
-    
-    def __init__(
-        self,
-        config_key: str,
-        reason: str,
-        **kwargs: Any
-    ) -> None:
-        super().__init__(
-            f"Invalid configuration for '{config_key}': {reason}",
-            details={
-                "config_key": config_key,
-                "reason": reason
-            },
-            user_message="The system is misconfigured. Please contact support.",
-            **kwargs
-        )
+def handle_external_service_error(service: str, operation: str, error: Exception) -> ExternalServiceError:
+    """Convert generic exceptions to external service errors."""
+    if isinstance(error, ExternalServiceError):
+        return error
+    else:
+        # Determine if error is retryable based on error type
+        retryable = not isinstance(error, (ValueError, TypeError, KeyError))
+        return ExternalServiceError(service, operation, str(error), retryable)
 
-# Error Handler
-class ErrorHandler:
+
+def sanitize_error_message(error: Exception, include_details: bool = False) -> str:
     """
-    Centralized error handler for consistent error processing.
+    Sanitize error messages for safe client exposure.
     
-    Features:
-    - Error transformation
-    - Retry logic
-    - Circuit breaking
-    - Error aggregation
+    Args:
+        error: The exception to sanitize
+        include_details: Whether to include detailed error information
+        
+    Returns:
+        Sanitized error message safe for client consumption
     """
-    
-    def __init__(self) -> None:
-        self._error_counts: Dict[str, int] = {}
-        self._circuit_breakers: Dict[str, Any] = {}
-    
-    def handle_error(
-        self,
-        error: Exception,
-        *,
-        context: Optional[Dict[str, Any]] = None,
-        correlation_id: Optional[str] = None
-    ) -> BaseError:
-        """
-        Handle and transform any exception to BaseError.
-        
-        Args:
-            error: Exception to handle
-            context: Additional context
-            correlation_id: Request correlation ID
-            
-        Returns:
-            Transformed BaseError instance
-        """
-        # If already a BaseError, enhance it
-        if isinstance(error, BaseError):
-            if correlation_id and not error.correlation_id:
-                error.correlation_id = correlation_id
-            if context:
-                error.metadata.update(context)
-            return error
-        
-        # Transform known exceptions
-        error_map = {
-            ValueError: ValidationError,
-            KeyError: NotFoundError,
-            PermissionError: AuthorizationError,
-            TimeoutError: ServiceTimeoutError,
-        }
-        
-        error_class = error_map.get(type(error), BaseError)
-        
-        # Create appropriate error
-        base_error = error_class(
-            str(error),
-            cause=error,
-            correlation_id=correlation_id,
-            metadata=context or {}
-        )
-        
-        # Track error frequency
-        error_key = f"{error_class.__name__}:{str(error)[:50]}"
-        self._error_counts[error_key] = self._error_counts.get(error_key, 0) + 1
-        
-        return base_error
-    
-    def get_error_stats(self) -> Dict[str, Any]:
-        """Get error statistics for monitoring."""
-        return {
-            "error_counts": self._error_counts.copy(),
-            "total_errors": sum(self._error_counts.values()),
-            "unique_errors": len(self._error_counts)
-        }
-
-# Global error handler instance
-error_handler = ErrorHandler()
-
-# Export public API
-__all__ = [
-    # Base classes
-    'BaseError',
-    'ErrorCategory',
-    'ErrorSeverity',
-    'ErrorCode',
-    
-    # Validation errors
-    'ValidationError',
-    'MissingFieldError',
-    'InvalidFormatError',
-    
-    # Authentication errors
-    'AuthenticationError',
-    'InvalidCredentialsError',
-    'TokenExpiredError',
-    'AccountLockedException',
-    
-    # Authorization errors
-    'AuthorizationError',
-    'InsufficientPermissionsError',
-    
-    # Resource errors
-    'NotFoundError',
-    'ConflictError',
-    'DuplicateResourceError',
-    
-    # Rate limiting
-    'RateLimitError',
-    
-    # External service errors
-    'ExternalServiceError',
-    'ServiceUnavailableError',
-    'ServiceTimeoutError',
-    
-    # Database errors
-    'DatabaseError',
-    'DatabaseConnectionError',
-    'DatabaseConstraintError',
-    
-    # Configuration errors
-    'ConfigurationError',
-    
-    # Error handler
-    'ErrorHandler',
-    'error_handler',
-] 
+    if isinstance(error, UKPHTTPException):
+        return error.detail
+    elif isinstance(error, UKPException):
+        return error.message if include_details else "An error occurred"
+    else:
+        # Generic exceptions should not expose internal details
+        return "An internal error occurred" 

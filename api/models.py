@@ -1,4 +1,4 @@
-from typing import Dict, Any, List, Optional
+from typing import Any, Optional
 from pydantic import BaseModel, Field
 from datetime import datetime
 
@@ -15,7 +15,7 @@ class QueryRequest(BaseModel):
     confidence_threshold: Optional[float] = Field(
         0.8, ge=0.0, le=1.0, description="Minimum confidence score"
     )
-    user_context: Optional[Dict[str, Any]] = Field(
+    user_context: Optional[dict[str, Any]] = Field(
         default_factory=dict, description="Additional user context"
     )
 
@@ -25,10 +25,10 @@ class QueryResponse(BaseModel):
 
     answer: str = Field(..., description="The AI-generated answer")
     confidence: float = Field(..., ge=0.0, le=1.0, description="Confidence score")
-    citations: List[Dict[str, Any]] = Field(default_factory=list, description="Source citations")
+    citations: list[dict[str, Any]] = Field(default_factory=list, description="Source citations")
     query_id: str = Field(..., description="Unique query identifier")
     processing_time: Optional[float] = Field(None, description="Processing time in seconds")
-    metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
+    metadata: dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
 
 
 class FeedbackRequest(BaseModel):
@@ -53,14 +53,14 @@ class QueryUpdateRequest(BaseModel):
     query: Optional[str] = Field(None, min_length=1, max_length=10000, description="Updated query text")
     max_tokens: Optional[int] = Field(None, ge=100, le=4000, description="Updated max tokens")
     confidence_threshold: Optional[float] = Field(None, ge=0.0, le=1.0, description="Updated confidence threshold")
-    user_context: Optional[Dict[str, Any]] = Field(None, description="Updated user context")
+    user_context: Optional[dict[str, Any]] = Field(None, description="Updated user context")
     reprocess: Optional[bool] = Field(False, description="Whether to reprocess the query")
 
 
 class QueryListResponse(BaseModel):
     """Response model for listing queries."""
     
-    queries: List[Dict[str, Any]] = Field(..., description="List of query records")
+    queries: list[dict[str, Any]] = Field(..., description="List of query records")
     total: int = Field(..., description="Total number of queries")
     page: int = Field(..., description="Current page number")
     page_size: int = Field(..., description="Number of queries per page")
@@ -74,8 +74,8 @@ class QueryDetailResponse(BaseModel):
     query: str = Field(..., description="Original query text")
     answer: str = Field(..., description="Generated answer")
     confidence: float = Field(..., description="Confidence score")
-    citations: List[Dict[str, Any]] = Field(..., description="Source citations")
-    metadata: Dict[str, Any] = Field(..., description="Query metadata")
+    citations: list[dict[str, Any]] = Field(..., description="Source citations")
+    metadata: dict[str, Any] = Field(..., description="Query metadata")
     created_at: datetime = Field(..., description="Query creation timestamp")
     updated_at: Optional[datetime] = Field(None, description="Last update timestamp")
     processing_time: Optional[float] = Field(None, description="Processing time in seconds")
@@ -100,7 +100,7 @@ class HealthResponse(BaseModel):
     version: str = Field(..., description="API version")
     timestamp: float = Field(..., description="Current timestamp")
     uptime: float = Field(..., description="Service uptime in seconds")
-    components: Dict[str, str] = Field(default_factory=dict, description="Component health status")
+    components: dict[str, str] = Field(default_factory=dict, description="Component health status")
     error: Optional[str] = Field(None, description="Error message if unhealthy")
 
 
@@ -146,13 +146,13 @@ class AnalyticsResponse(BaseModel):
     successful_queries: int = Field(..., description="Successful queries")
     failed_queries: int = Field(..., description="Failed queries")
     average_confidence: float = Field(..., description="Average confidence score")
-    top_queries: List[Dict[str, Any]] = Field(
+    top_queries: list[dict[str, Any]] = Field(
         default_factory=list, description="Most popular queries"
     )
-    user_activity: Dict[str, int] = Field(
+    user_activity: dict[str, int] = Field(
         default_factory=dict, description="User activity by user ID"
     )
-    time_period: Dict[str, Any] = Field(
+    time_period: dict[str, Any] = Field(
         default_factory=dict, description="Time period for analytics"
     )
 
@@ -163,7 +163,7 @@ class ErrorResponse(BaseModel):
     error: str = Field(..., description="Error message")
     request_id: str = Field(..., description="Request ID for tracing")
     timestamp: float = Field(..., description="Error timestamp")
-    details: Optional[Dict[str, Any]] = Field(None, description="Error details")
+    details: Optional[dict[str, Any]] = Field(None, description="Error details")
 
 
 class CacheStats(BaseModel):
@@ -182,7 +182,7 @@ class SecurityInfo(BaseModel):
 
     threats_blocked: int = Field(..., description="Number of threats blocked")
     rate_limit_violations: int = Field(..., description="Rate limit violations")
-    suspicious_ips: List[str] = Field(default_factory=list, description="Suspicious IP addresses")
+    suspicious_ips: list[str] = Field(default_factory=list, description="Suspicious IP addresses")
     last_security_scan: Optional[datetime] = Field(None, description="Last security scan timestamp")
     security_score: float = Field(..., ge=0.0, le=100.0, description="Security score")
 

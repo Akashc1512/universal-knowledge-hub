@@ -11,6 +11,8 @@ interface AnswerDisplayProps {
   isLoading: boolean;
   error?: string;
   queryId?: string;
+  queryType?: 'cached' | 'fresh' | 'reprocessed';
+  processingTime?: number;
 }
 
 export default function AnswerDisplay({
@@ -19,7 +21,9 @@ export default function AnswerDisplay({
   citations,
   isLoading,
   error,
-  queryId
+  queryId,
+  queryType,
+  processingTime
 }: AnswerDisplayProps) {
   if (isLoading) {
     return (
@@ -49,7 +53,7 @@ export default function AnswerDisplay({
     return (
       <div className="w-full max-w-4xl mx-auto" role="alert">
         <div className="bg-red-50 border border-red-200 rounded-lg p-6">
-          <div className="flex items-center">
+          <div className="flex items-start">
             <div className="flex-shrink-0">
               <svg className="h-5 w-5 text-red-400" viewBox="0 0 20 20" fill="currentColor">
                 <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
@@ -62,6 +66,14 @@ export default function AnswerDisplay({
               <div className="mt-2 text-sm text-red-700">
                 {error}
               </div>
+              {error.includes('503') && (
+                <div className="mt-3 p-3 bg-red-100 rounded-md">
+                  <p className="text-xs text-red-700">
+                    The service is temporarily unavailable. This might be due to system initialization. 
+                    Please try again in a few moments.
+                  </p>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -79,11 +91,23 @@ export default function AnswerDisplay({
         {/* Answer Header */}
         <div className="px-6 py-4 border-b border-gray-200 bg-gray-50">
           <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold text-gray-900">
-              Answer
-            </h2>
+            <div className="flex items-center space-x-3">
+              <h2 className="text-lg font-semibold text-gray-900">
+                Answer
+              </h2>
+              {queryType === 'cached' && (
+                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                  Cached Result
+                </span>
+              )}
+            </div>
             <ConfidenceBadge confidence={confidence} />
           </div>
+          {processingTime && (
+            <div className="mt-2 text-xs text-gray-500">
+              Processed in {processingTime.toFixed(2)}s
+            </div>
+          )}
         </div>
 
         {/* Answer Content */}

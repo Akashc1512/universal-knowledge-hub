@@ -1,0 +1,262 @@
+{
+  "total_tests": 8,
+  "passed_tests": 1,
+  "failed_tests": 7,
+  "success_rate": 12.5,
+  "owasp_compliance": 0.0,
+  "nist_compliance": 0.0,
+  "overall_compliance": 0.0,
+  "results": [
+    {
+      "test_name": "Security Headers",
+      "passed": false,
+      "details": {
+        "status_code": 200,
+        "headers_found": [
+          "date",
+          "server",
+          "content-length",
+          "content-type",
+          "x-request-id"
+        ],
+        "missing_headers": [
+          "X-Content-Type-Options",
+          "X-Frame-Options",
+          "X-XSS-Protection",
+          "Referrer-Policy",
+          "Content-Security-Policy"
+        ],
+        "csp_present": false
+      },
+      "timestamp": "2025-07-29T16:07:08.016861"
+    },
+    {
+      "test_name": "Password Validation",
+      "passed": false,
+      "details": {
+        "weak_passwords_tested": 5,
+        "strong_passwords_tested": 4,
+        "failed_weak_validation": [
+          "123456",
+          "password",
+          "Password",
+          "Password123",
+          "password123!"
+        ]
+      },
+      "timestamp": "2025-07-29T16:07:08.087788"
+    },
+    {
+      "test_name": "Authentication",
+      "passed": false,
+      "details": {
+        "login_successful": false,
+        "status_code": 401,
+        "response": "{\"detail\":\"Invalid credentials\"}"
+      },
+      "timestamp": "2025-07-29T16:07:08.095324"
+    },
+    {
+      "test_name": "Authorization",
+      "passed": false,
+      "details": {
+        "error": "No authentication token available"
+      },
+      "timestamp": "2025-07-29T16:07:08.096224"
+    },
+    {
+      "test_name": "Input Validation",
+      "passed": false,
+      "details": {
+        "malicious_inputs_tested": 5,
+        "validation_failures": [
+          {
+            "input": {
+              "query": "<script>alert('xss')</script>"
+            },
+            "status_code": 200,
+            "response": "{\"answer\":\"Here is the answer to your query: '<script>alert('xss')</script>'. This is a simulated response from the Universal Knowledge Hub running on Python 3.13.5.\",\"confidence\":0.95,\"query_id\":\"4cb7ef7c-9ec5-48a0-91b0-65f8967dfa72\",\"processing_time\":0.10167622566223145,\"metadata\":{\"model\":\"simulated-ai\",\"python_version\":\"3.13.5\",\"request_tokens\":1}}"
+          },
+          {
+            "input": {
+              "query": "'; DROP TABLE users; --"
+            },
+            "status_code": 200,
+            "response": "{\"answer\":\"Here is the answer to your query: ''; DROP TABLE users; --'. This is a simulated response from the Universal Knowledge Hub running on Python 3.13.5.\",\"confidence\":0.95,\"query_id\":\"fc94d277-311c-42a5-9dbd-4a8d7066c2e1\",\"processing_time\":0.1037135124206543,\"metadata\":{\"model\":\"simulated-ai\",\"python_version\":\"3.13.5\",\"request_tokens\":5}}"
+          },
+          {
+            "input": {
+              "query": "../../../etc/passwd"
+            },
+            "status_code": 200,
+            "response": "{\"answer\":\"Here is the answer to your query: '../../../etc/passwd'. This is a simulated response from the Universal Knowledge Hub running on Python 3.13.5.\",\"confidence\":0.95,\"query_id\":\"38aded43-ee44-4283-8950-3e067e90ac96\",\"processing_time\":0.10202360153198242,\"metadata\":{\"model\":\"simulated-ai\",\"python_version\":\"3.13.5\",\"request_tokens\":1}}"
+          },
+          {
+            "input": {
+              "query": "admin' OR '1'='1"
+            },
+            "status_code": 200,
+            "response": "{\"answer\":\"Here is the answer to your query: 'admin' OR '1'='1'. This is a simulated response from the Universal Knowledge Hub running on Python 3.13.5.\",\"confidence\":0.95,\"query_id\":\"f99a6445-8947-4f9a-ae89-806b62de5277\",\"processing_time\":0.1068260669708252,\"metadata\":{\"model\":\"simulated-ai\",\"python_version\":\"3.13.5\",\"request_tokens\":3}}"
+          },
+          {
+            "input": {
+              "query": "javascript:alert('xss')"
+            },
+            "status_code": 200,
+            "response": "{\"answer\":\"Here is the answer to your query: 'javascript:alert('xss')'. This is a simulated response from the Universal Knowledge Hub running on Python 3.13.5.\",\"confidence\":0.95,\"query_id\":\"6c25a2ed-322b-4b3b-b769-914791b5aea3\",\"processing_time\":0.10314083099365234,\"metadata\":{\"model\":\"simulated-ai\",\"python_version\":\"3.13.5\",\"request_tokens\":1}}"
+          }
+        ]
+      },
+      "timestamp": "2025-07-29T16:07:08.647197"
+    },
+    {
+      "test_name": "Rate Limiting",
+      "passed": false,
+      "details": {
+        "attempts_made": 10,
+        "rate_limited": false,
+        "attempts": [
+          {
+            "attempt": 1,
+            "status_code": 401,
+            "response": "{\"detail\":\"Invalid credentials\"}"
+          },
+          {
+            "attempt": 2,
+            "status_code": 401,
+            "response": "{\"detail\":\"Invalid credentials\"}"
+          },
+          {
+            "attempt": 3,
+            "status_code": 401,
+            "response": "{\"detail\":\"Invalid credentials\"}"
+          },
+          {
+            "attempt": 4,
+            "status_code": 401,
+            "response": "{\"detail\":\"Invalid credentials\"}"
+          },
+          {
+            "attempt": 5,
+            "status_code": 401,
+            "response": "{\"detail\":\"Invalid credentials\"}"
+          },
+          {
+            "attempt": 6,
+            "status_code": 401,
+            "response": "{\"detail\":\"Invalid credentials\"}"
+          },
+          {
+            "attempt": 7,
+            "status_code": 401,
+            "response": "{\"detail\":\"Invalid credentials\"}"
+          },
+          {
+            "attempt": 8,
+            "status_code": 401,
+            "response": "{\"detail\":\"Invalid credentials\"}"
+          },
+          {
+            "attempt": 9,
+            "status_code": 401,
+            "response": "{\"detail\":\"Invalid credentials\"}"
+          },
+          {
+            "attempt": 10,
+            "status_code": 401,
+            "response": "{\"detail\":\"Invalid credentials\"}"
+          }
+        ]
+      },
+      "timestamp": "2025-07-29T16:07:08.713048"
+    },
+    {
+      "test_name": "Audit Logging",
+      "passed": true,
+      "details": {
+        "actions_performed": 4,
+        "successful_actions": 2,
+        "actions": [
+          {
+            "action": "login",
+            "endpoint": "/auth/login",
+            "status_code": 401,
+            "success": false
+          },
+          {
+            "action": "query",
+            "endpoint": "/query",
+            "status_code": 200,
+            "success": true
+          },
+          {
+            "action": "health",
+            "endpoint": "/health",
+            "status_code": 200,
+            "success": true
+          },
+          {
+            "action": "security_status",
+            "endpoint": "/security/status",
+            "status_code": 404,
+            "success": false
+          }
+        ]
+      },
+      "timestamp": "2025-07-29T16:07:08.843418"
+    },
+    {
+      "test_name": "API Security",
+      "passed": false,
+      "details": {
+        "total_tests": 3,
+        "passed_tests": 2,
+        "tests": [
+          {
+            "test": "CORS",
+            "passed": false,
+            "details": {
+              "cors_header": null
+            }
+          },
+          {
+            "test": "Request ID Tracking",
+            "passed": true,
+            "details": {
+              "request_id": "d087fb10-f7a9-442b-bf2f-229ee7b1f264"
+            }
+          },
+          {
+            "test": "Error Handling",
+            "passed": true,
+            "details": {
+              "status_code": 404
+            }
+          }
+        ]
+      },
+      "timestamp": "2025-07-29T16:07:08.863548"
+    }
+  ],
+  "compliance": {
+    "OWASP Top 10": {
+      "A01:2021 - Broken Access Control": false,
+      "A02:2021 - Cryptographic Failures": false,
+      "A03:2021 - Injection": false,
+      "A04:2021 - Insecure Design": false,
+      "A05:2021 - Security Misconfiguration": false,
+      "A06:2021 - Vulnerable Components": false,
+      "A07:2021 - Authentication Failures": false,
+      "A08:2021 - Software and Data Integrity Failures": false,
+      "A09:2021 - Security Logging Failures": false,
+      "A10:2021 - Server-Side Request Forgery": false
+    },
+    "NIST Cybersecurity Framework": {
+      "Identify": false,
+      "Protect": false,
+      "Detect": false,
+      "Respond": false,
+      "Recover": false
+    }
+  }
+}

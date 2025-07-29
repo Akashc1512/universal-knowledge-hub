@@ -1,294 +1,324 @@
-# Universal Knowledge Platform - C4 Model Architecture
+# C4 Model - Universal Knowledge Platform
 
-## Level 1: System Context Diagram
+## 🏗️ **System Context Diagram**
 
-```mermaid
-graph TB
-    User[👤 End User] --> ALB[🌐 Application Load Balancer]
-    Admin[👨‍💼 System Administrator] --> ALB
-    API[🔌 External APIs] --> ALB
-    
-    ALB --> UKP[🏢 Universal Knowledge Platform]
-    
-    UKP --> DB[(🗄️ PostgreSQL Database)]
-    UKP --> Cache[(⚡ Redis Cache)]
-    UKP --> Search[(🔍 Elasticsearch)]
-    UKP --> Storage[(📦 S3 Storage)]
-    
-    subgraph "AWS Cloud"
-        UKP
-        DB
-        Cache
-        Search
-        Storage
-    end
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    External Users                              │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐          │
+│  │   Web       │  │   Mobile    │  │   API       │          │
+│  │   Users     │  │   Users     │  │   Clients   │          │
+│  └─────────────┘  └─────────────┘  └─────────────┘          │
+└─────────────────────────────────────────────────────────────────┘
+                                │
+                                ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    Universal Knowledge Platform                │
+│                                                               │
+│  ┌─────────────────┐    ┌─────────────────┐                  │
+│  │   Frontend      │    │   Backend       │                  │
+│  │   (Next.js)     │◄──►│   (FastAPI)     │                  │
+│  │                 │    │                 │                  │
+│  │ • Query Form    │    │ • Multi-Agent   │                  │
+│  │ • Answer Display│    │   Pipeline      │                  │
+│  │ • Analytics     │    │ • Rate Limiting │                  │
+│  │ • Expert UI     │    │ • Security      │                  │
+│  └─────────────────┘    └─────────────────┘                  │
+│           │                       │                          │
+│           ▼                       ▼                          │
+│  ┌─────────────────┐    ┌─────────────────┐                  │
+│  │   Vector DB     │    │   PostgreSQL    │                  │
+│  │   (Pinecone)    │    │   (Analytics)   │                  │
+│  │                 │    │                 │                  │
+│  │ • Document      │    │ • User Data     │                  │
+│  │   Storage       │    │ • Query History │                  │
+│  │ • Semantic      │    │ • Analytics     │                  │
+│  │   Search        │    │ • Feedback      │                  │
+│  └─────────────────┘    └─────────────────┘                  │
+└─────────────────────────────────────────────────────────────────┘
+                                │
+                                ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    External Services                           │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐          │
+│  │   OpenAI    │  │   Wikipedia │  │   Academic  │          │
+│  │   API       │  │   API       │  │   Databases │          │
+│  └─────────────┘  └─────────────┘  └─────────────┘          │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-## Level 2: Container Diagram
+## 🏢 **Container Diagram**
 
-```mermaid
-graph TB
-    User[👤 End User] --> ALB[🌐 Application Load Balancer]
-    
-    ALB --> API[🚀 API Gateway]
-    ALB --> Web[🌐 Web Application]
-    
-    API --> Auth[🔐 Authentication Service]
-    API --> Query[🔍 Query Processing Service]
-    API --> Content[📄 Content Management Service]
-    API --> Search[🔎 Search Service]
-    
-    Query --> Orchestrator[🎭 Lead Orchestrator]
-    Orchestrator --> Retrieval[📚 Retrieval Agent]
-    Orchestrator --> FactCheck[✅ Fact Check Agent]
-    Orchestrator --> Synthesis[🧠 Synthesis Agent]
-    Orchestrator --> Citation[📝 Citation Agent]
-    
-    Auth --> DB[(🗄️ PostgreSQL)]
-    Content --> DB
-    Search --> ES[(🔍 Elasticsearch)]
-    Cache --> Redis[(⚡ Redis)]
-    
-    subgraph "Kubernetes Cluster"
-        API
-        Auth
-        Query
-        Content
-        Search
-        Orchestrator
-        Retrieval
-        FactCheck
-        Synthesis
-        Citation
-    end
+### **Frontend Container**
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Frontend Container                      │
+│                                                           │
+│  Technology: Next.js 15, React 19, TypeScript 5.5        │
+│  Language: TypeScript/JavaScript                          │
+│  Framework: Next.js with App Router                       │
+│  Styling: Tailwind CSS 3.4.0                             │
+│                                                           │
+│  Responsibilities:                                        │
+│  • User interface and interactions                        │
+│  • Query input and result display                         │
+│  • Real-time feedback and analytics                       │
+│  • Responsive design and accessibility                    │
+│  • Client-side state management                           │
+│                                                           │
+│  Dependencies:                                            │
+│  • Backend API (REST/GraphQL)                            │
+│  • CDN for static assets                                  │
+│  • Analytics services                                     │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-## Level 3: Component Diagram
-
-### API Gateway Component
-
-```mermaid
-graph TB
-    Request[📥 HTTP Request] --> Router[🛣️ Request Router]
-    
-    Router --> AuthMiddleware[🔐 Authentication Middleware]
-    Router --> RateLimit[⏱️ Rate Limiting]
-    Router --> Logging[📝 Request Logging]
-    
-    AuthMiddleware --> AuthService[🔐 Auth Service]
-    RateLimit --> Cache[(⚡ Redis)]
-    Logging --> Monitoring[📊 Monitoring Service]
-    
-    Router --> HealthCheck[🏥 Health Check]
-    Router --> Metrics[📈 Metrics Endpoint]
-    Router --> API[🔌 API Endpoints]
-    
-    API --> QueryProcessor[🔍 Query Processor]
-    API --> AgentManager[🤖 Agent Manager]
-    API --> ResponseFormatter[📤 Response Formatter]
+### **Backend Container**
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Backend Container                       │
+│                                                           │
+│  Technology: FastAPI 0.116.1, Python 3.13.5              │
+│  Language: Python                                         │
+│  Framework: FastAPI with async/await                      │
+│  Server: Uvicorn 0.35.0                                  │
+│                                                           │
+│  Responsibilities:                                        │
+│  • Multi-agent orchestration                              │
+│  • API endpoints and routing                              │
+│  • Authentication and authorization                        │
+│  • Rate limiting and security                             │
+│  • Data validation and serialization                      │
+│  • Health checks and monitoring                           │
+│                                                           │
+│  Dependencies:                                            │
+│  • PostgreSQL Database                                    │
+│  • Redis Cache                                           │
+│  • Vector Database (Pinecone)                            │
+│  • External AI Services                                   │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-### Lead Orchestrator Component
-
-```mermaid
-graph TB
-    Query[📝 User Query] --> Orchestrator[🎭 Lead Orchestrator]
-    
-    Orchestrator --> QueryAnalyzer[🔍 Query Analyzer]
-    Orchestrator --> AgentSelector[🤖 Agent Selector]
-    Orchestrator --> WorkflowEngine[⚙️ Workflow Engine]
-    Orchestrator --> ResultAggregator[📊 Result Aggregator]
-    
-    QueryAnalyzer --> IntentClassifier[🎯 Intent Classifier]
-    QueryAnalyzer --> EntityExtractor[🏷️ Entity Extractor]
-    
-    AgentSelector --> RetrievalAgent[📚 Retrieval Agent]
-    AgentSelector --> FactCheckAgent[✅ Fact Check Agent]
-    AgentSelector --> SynthesisAgent[🧠 Synthesis Agent]
-    AgentSelector --> CitationAgent[📝 Citation Agent]
-    
-    WorkflowEngine --> Pipeline[🔗 Agent Pipeline]
-    WorkflowEngine --> Cache[(⚡ Cache)]
-    WorkflowEngine --> Monitoring[📊 Monitoring]
-    
-    ResultAggregator --> ConfidenceScorer[📊 Confidence Scorer]
-    ResultAggregator --> CitationGenerator[📝 Citation Generator]
-    ResultAggregator --> ResponseFormatter[📤 Response Formatter]
+### **Database Container**
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Database Container                      │
+│                                                           │
+│  Technology: PostgreSQL 15, Redis 7                       │
+│  Language: SQL, Redis Commands                           │
+│  ORM: SQLAlchemy 2.0.41                                  │
+│  Cache: Redis 5.0.1                                      │
+│                                                           │
+│  Responsibilities:                                        │
+│  • User data and authentication                           │
+│  • Query history and analytics                            │
+│  • Session management                                     │
+│  • Caching and performance optimization                   │
+│  • Data persistence and backup                            │
+│                                                           │
+│  Dependencies:                                            │
+│  • Backup services                                        │
+│  • Monitoring and alerting                                │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-## Level 4: Code Diagram
-
-### Agent Interface
-
-```python
-# Core agent interface
-class BaseAgent:
-    async def process(self, context: QueryContext) -> AgentResult
-    async def validate_input(self, context: QueryContext) -> bool
-    async def generate_response(self, context: QueryContext) -> AgentResult
-    async def calculate_confidence(self, result: AgentResult) -> float
-
-# Specific agent implementations
-class RetrievalAgent(BaseAgent):
-    async def hybrid_search(self, query: str) -> List[Document]
-    async def semantic_search(self, query: str) -> List[Document]
-    async def keyword_search(self, query: str) -> List[Document]
-
-class FactCheckAgent(BaseAgent):
-    async def verify_claims(self, claims: List[str]) -> List[ClaimResult]
-    async def cross_reference(self, claim: str) -> List[Source]
-    async def calculate_veracity(self, claim: str) -> float
-
-class SynthesisAgent(BaseAgent):
-    async def generate_answer(self, context: QueryContext) -> str
-    async def integrate_sources(self, sources: List[Document]) -> str
-    async def assess_confidence(self, answer: str) -> float
-
-class CitationAgent(BaseAgent):
-    async def generate_citations(self, sources: List[Document]) -> List[Citation]
-    async def format_citation(self, citation: Citation, format: str) -> str
-    async def validate_source(self, source: Document) -> bool
+### **Vector Database Container**
+```
+┌─────────────────────────────────────────────────────────────┐
+│                Vector Database Container                   │
+│                                                           │
+│  Technology: Pinecone, Elasticsearch 8.15.0              │
+│  Language: Python, REST API                              │
+│  Client: Pinecone Client, Elasticsearch Client            │
+│                                                           │
+│  Responsibilities:                                        │
+│  • Document storage and indexing                          │
+│  • Semantic search and similarity                         │
+│  • Vector embeddings storage                              │
+│  • Full-text search capabilities                          │
+│  • Knowledge graph storage                                │
+│                                                           │
+│  Dependencies:                                            │
+│  • OpenAI Embeddings API                                  │
+│  • Document processing pipeline                           │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-### Data Flow
+## 🏗️ **Component Diagram**
 
-```mermaid
-sequenceDiagram
-    participant U as User
-    participant API as API Gateway
-    participant O as Orchestrator
-    participant R as Retrieval Agent
-    participant F as Fact Check Agent
-    participant S as Synthesis Agent
-    participant C as Citation Agent
-    participant DB as Database
-    participant Cache as Cache
-
-    U->>API: Submit Query
-    API->>O: Process Query
-    O->>R: Retrieve Documents
-    R->>DB: Search Database
-    R->>Cache: Check Cache
-    R-->>O: Return Documents
-    
-    O->>F: Verify Claims
-    F->>DB: Cross Reference
-    F-->>O: Return Verified Claims
-    
-    O->>S: Synthesize Answer
-    S->>Cache: Check Previous Answers
-    S-->>O: Return Answer
-    
-    O->>C: Generate Citations
-    C-->>O: Return Citations
-    
-    O->>API: Aggregate Results
-    API-->>U: Return Response
+### **Frontend Components**
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Frontend Components                     │
+│                                                           │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐      │
+│  │   Query     │  │   Answer    │  │   Analytics │      │
+│  │   Form      │  │   Display   │  │   Dashboard │      │
+│  └─────────────┘  └─────────────┘  └─────────────┘      │
+│                                                           │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐      │
+│  │   Expert    │  │   Citation  │  │   Feedback  │      │
+│  │   Mode      │  │   List      │  │   System    │      │
+│  └─────────────┘  └─────────────┘  └─────────────┘      │
+│                                                           │
+│  Technology: React 19, TypeScript 5.5, Tailwind CSS      │
+│  State Management: React Context + Hooks                  │
+│  Routing: Next.js App Router                              │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-## Technology Stack
+### **Backend Components**
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Backend Components                      │
+│                                                           │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐      │
+│  │   Lead      │  │   Retrieval │  │   Synthesis │      │
+│  │Orchestrator │  │   Agent     │  │   Agent     │      │
+│  └─────────────┘  └─────────────┘  └─────────────┘      │
+│                                                           │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐      │
+│  │   Fact-Check│  │   Citation  │  │   API       │      │
+│  │   Agent     │  │   Agent     │  │   Gateway   │      │
+│  └─────────────┘  └─────────────┘  └─────────────┘      │
+│                                                           │
+│  Technology: FastAPI, Python 3.13.5, Pydantic            │
+│  Architecture: Multi-Agent System                         │
+│  Communication: Async/await, Event-driven                 │
+└─────────────────────────────────────────────────────────────┘
+```
 
-### Infrastructure Layer
-- **Cloud Provider**: AWS
-- **Container Orchestration**: Kubernetes (EKS)
-- **Load Balancer**: Application Load Balancer
-- **Database**: PostgreSQL (RDS)
-- **Cache**: Redis (ElastiCache)
+## 🔧 **Technology Stack**
+
+### **Frontend Stack**
+- **Framework**: Next.js 15 (Latest stable)
+- **UI Library**: React 19 (Latest stable)
+- **Language**: TypeScript 5.5 (Latest stable)
+- **Styling**: Tailwind CSS 3.4.0 (Latest stable)
+- **Development**: Node.js 20.19.4 (Latest LTS)
+
+### **Backend Stack**
+- **Framework**: FastAPI 0.116.1 (Latest stable)
+- **Language**: Python 3.13.5 (Latest stable)
+- **Server**: Uvicorn 0.35.0 (Latest stable)
+- **Validation**: Pydantic 2.11.7 (Latest stable)
+
+### **Database Stack**
+- **Primary**: PostgreSQL 15
+- **Cache**: Redis 7
+- **Vector**: Pinecone
+- **Search**: Elasticsearch 8.15.0
+
+### **AI & ML Stack**
+- **OpenAI**: GPT-4, Embeddings API
+- **Vector DB**: Pinecone
 - **Search**: Elasticsearch
-- **Storage**: S3
-- **Monitoring**: Prometheus + Grafana
+- **Caching**: Redis
 
-### Application Layer
-- **API Framework**: FastAPI
-- **Language**: Python 3.11+
-- **Async Runtime**: asyncio
-- **HTTP Client**: aiohttp
-- **Serialization**: Pydantic
+### **Development & Testing**
+- **Testing**: pytest 8.4.1, pytest-cov 5.0.0
+- **Linting**: flake8 7.2.1, black 25.1.1
+- **Type Checking**: mypy 1.12.0
+- **Security**: bandit 1.8.1
 
-### AI/ML Layer
-- **Vector Embeddings**: sentence-transformers
-- **Language Models**: OpenAI GPT, Anthropic Claude
-- **Search**: Elasticsearch with k-NN
-- **Caching**: Redis with semantic caching
+## 🏗️ **Deployment Architecture**
 
-### Development Tools
-- **Version Control**: Git
-- **CI/CD**: GitHub Actions
-- **Infrastructure as Code**: Terraform
-- **Containerization**: Docker
-- **Testing**: pytest
-- **Linting**: flake8, black, mypy
+### **Development Environment**
+```
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│   Local         │    │   Development   │    │   Testing       │
+│   Development   │    │   Server        │    │   Environment   │
+│                 │    │                 │    │                 │
+│ • Python 3.13.5│    │ • FastAPI       │    │ • Automated     │
+│ • Node.js 20   │    │ • Next.js       │    │   Testing       │
+│ • Hot Reload   │    │ • Hot Reload    │    │ • CI/CD         │
+└─────────────────┘    └─────────────────┘    └─────────────────┘
+```
 
-## Security Architecture
+### **Production Environment**
+```
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│   Load          │    │   Application   │    │   Database      │
+│   Balancer      │    │   Servers       │    │   Cluster       │
+│                 │    │                 │    │                 │
+│ • Nginx         │    │ • Kubernetes    │    │ • PostgreSQL    │
+│ • SSL/TLS       │    │ • Auto-scaling  │    │ • Redis         │
+│ • CDN           │    │ • Monitoring    │    │ • Backup        │
+└─────────────────┘    └─────────────────┘    └─────────────────┘
+```
 
-### Authentication & Authorization
+## 🔒 **Security Architecture**
+
+### **Authentication & Authorization**
 - **JWT Tokens**: Stateless authentication
-- **RBAC**: Role-based access control
-- **API Keys**: For external integrations
-- **Rate Limiting**: Per-user and per-endpoint
+- **OAuth 2.0**: Third-party integration
+- **Role-based Access**: Granular permissions
+- **API Keys**: Service-to-service communication
 
-### Data Protection
-- **Encryption at Rest**: AES-256 for databases
-- **Encryption in Transit**: TLS 1.3 for all connections
-- **Secrets Management**: AWS Secrets Manager
-- **Data Masking**: PII protection
+### **Data Protection**
+- **Encryption**: AES-256 for data at rest
+- **TLS**: Transport layer security
+- **Input Validation**: Comprehensive sanitization
+- **Rate Limiting**: DDoS protection
 
-### Network Security
-- **VPC**: Isolated network environment
-- **Security Groups**: Firewall rules
-- **WAF**: Web Application Firewall
-- **DDoS Protection**: AWS Shield
+### **Monitoring & Compliance**
+- **Audit Logging**: Complete activity tracking
+- **Security Scanning**: Automated vulnerability checks
+- **Compliance**: GDPR, CCPA ready
+- **Incident Response**: Automated alerting
 
-## Scalability Architecture
+## 📊 **Performance Architecture**
 
-### Horizontal Scaling
-- **Auto-scaling**: Kubernetes HPA
-- **Load Distribution**: ALB with health checks
-- **Database Scaling**: Read replicas
+### **Caching Strategy**
+- **CDN**: Static asset delivery
+- **Redis**: Session and query caching
+- **Application Cache**: In-memory caching
+- **Database Cache**: Query result caching
+
+### **Scaling Strategy**
+- **Horizontal**: Auto-scaling based on load
+- **Vertical**: Resource optimization
+- **Geographic**: Multi-region deployment
+- **Database**: Read replicas and sharding
+
+### **Monitoring & Alerting**
+- **Application Metrics**: Response times, error rates
+- **Infrastructure**: CPU, memory, disk usage
+- **Business Metrics**: User engagement, query volume
+- **Alerting**: Automated notifications
+
+## 🚀 **Deployment Pipeline**
+
+### **CI/CD Pipeline**
+```
+┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐
+│   Code      │  │   Build     │  │   Test      │  │   Deploy    │
+│   Commit    │──►│   & Package │──►│   & Quality │──►│   to Prod   │
+└─────────────┘  └─────────────┘  └─────────────┘  └─────────────┘
+```
+
+### **Quality Gates**
+- **Code Coverage**: 95% minimum
+- **Security Scan**: No critical vulnerabilities
+- **Performance**: Response time < 2s
+- **Documentation**: 90% complete
+
+## 📈 **Scalability Considerations**
+
+### **Current Capacity**
+- **Concurrent Users**: 1,000+
+- **Queries per Second**: 100+
+- **Data Storage**: 1TB+
+- **Response Time**: < 2s
+
+### **Future Scaling**
+- **Horizontal Scaling**: Kubernetes auto-scaling
+- **Database Scaling**: Read replicas, sharding
 - **Cache Scaling**: Redis cluster
+- **CDN Scaling**: Global edge locations
 
-### Performance Optimization
-- **Caching**: Multi-level caching strategy
-- **CDN**: CloudFront for static content
-- **Database Optimization**: Connection pooling
-- **Async Processing**: Background tasks
+---
 
-## Monitoring & Observability
-
-### Metrics Collection
-- **Application Metrics**: Custom Prometheus metrics
-- **Infrastructure Metrics**: CloudWatch
-- **Business Metrics**: Custom dashboards
-- **Performance Metrics**: APM with tracing
-
-### Alerting
-- **Critical Alerts**: Service down, high error rates
-- **Performance Alerts**: High latency, low throughput
-- **Business Alerts**: Query volume, success rates
-- **Security Alerts**: Unusual access patterns
-
-### Logging
-- **Structured Logging**: JSON format
-- **Log Aggregation**: CloudWatch Logs
-- **Log Analysis**: ELK stack
-- **Audit Logging**: Security events
-
-## Deployment Architecture
-
-### Environment Strategy
-- **Development**: Local Docker Compose
-- **Staging**: AWS with test data
-- **Production**: AWS with full monitoring
-
-### Deployment Pipeline
-- **Code Review**: Pull request workflow
-- **Automated Testing**: Unit, integration, performance
-- **Security Scanning**: SAST, DAST, container scanning
-- **Deployment**: Blue-green deployment
-- **Rollback**: Automated rollback capability
-
-### Configuration Management
-- **Environment Variables**: 12-factor app principles
-- **Secrets**: AWS Secrets Manager
-- **Feature Flags**: Dynamic configuration
-- **Database Migrations**: Version-controlled schema changes 
+**Last Updated**: January 2025  
+**Version**: 1.0.0  
+**Status**: Production Ready 

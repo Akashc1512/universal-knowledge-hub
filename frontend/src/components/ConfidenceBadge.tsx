@@ -17,17 +17,24 @@ export default function ConfidenceBadge({ confidence }: ConfidenceBadgeProps) {
     return 'Low';
   };
 
+  const getConfidenceDescription = (conf: number) => {
+    if (conf >= 0.8) return 'Very confident in this answer';
+    if (conf >= 0.6) return 'Moderately confident in this answer';
+    return 'Low confidence in this answer';
+  };
+
   const percentage = Math.round(confidence * 100);
 
   return (
-    <div className="flex items-center space-x-2">
-      <span className="text-sm text-gray-500">Confidence:</span>
+    <div className="flex items-center space-x-2" role="status" aria-live="polite">
+      <span className="text-sm text-gray-500 sr-only">Confidence level:</span>
       <span
         className={`
           inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium border
           ${getConfidenceColor(confidence)}
         `}
-        title={`Confidence: ${percentage}%`}
+        title={getConfidenceDescription(confidence)}
+        aria-label={`Confidence: ${getConfidenceLabel(confidence)} (${percentage}%)`}
       >
         {getConfidenceLabel(confidence)} ({percentage}%)
       </span>

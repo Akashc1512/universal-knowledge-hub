@@ -138,17 +138,25 @@ class UserManager:
         self.create_user(user)
         
         logger.info("Default users created successfully")
-        print("\n" + "="*60)
-        print("🔐 DEFAULT USER CREDENTIALS CREATED")
-        print("="*60)
-        print("Admin Account:")
-        print("  Username: admin")
-        print("  Password: AdminPass123!")
-        print("\nUser Account:")
-        print("  Username: user")
-        print("  Password: UserPass123!")
-        print("\n⚠️  IMPORTANT: Change these passwords immediately!")
-        print("="*60 + "\n")
+        # Log the creation of default credentials with security warning
+        logger.warning("Default user credentials created - CHANGE IMMEDIATELY IN PRODUCTION")
+        logger.info("Admin account created with username: admin")
+        logger.info("User account created with username: user")
+        logger.warning("Default passwords are insecure - change immediately!")
+        
+        # Print to console for development convenience (remove in production)
+        if os.getenv("ENVIRONMENT") != "production":
+            print("\n" + "="*60)
+            print("🔐 DEFAULT USER CREDENTIALS CREATED")
+            print("="*60)
+            print("Admin Account:")
+            print("  Username: admin")
+            print("  Password: AdminPass123!")
+            print("\nUser Account:")
+            print("  Username: user")
+            print("  Password: UserPass123!")
+            print("\n⚠️  IMPORTANT: Change these passwords immediately!")
+            print("="*60 + "\n")
     
     def get_password_hash(self, password: str) -> str:
         """Hash a password."""

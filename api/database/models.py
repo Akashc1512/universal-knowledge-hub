@@ -940,7 +940,6 @@ class Query(Base):
     feedback_rating = Column(
         Integer,
         nullable=True,
-        CheckConstraint('feedback_rating >= 1 AND feedback_rating <= 5'),
         comment="User feedback rating"
     )
     

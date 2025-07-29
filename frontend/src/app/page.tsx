@@ -7,6 +7,9 @@ import QueryForm from '@/components/QueryForm';
 import AnswerDisplay from '@/components/AnswerDisplay';
 import FeedbackForm from '@/components/FeedbackForm';
 import ErrorDisplay from '@/components/ErrorDisplay';
+import ToastContainer, { useToasts } from '@/components/ToastContainer';
+import AnalyticsDashboard from '@/components/AnalyticsDashboard';
+import { ChartBarIcon } from '@heroicons/react/24/outline';
 
 export default function HomePage() {
   const [isLoading, setIsLoading] = useState(false);
@@ -14,6 +17,8 @@ export default function HomePage() {
   const [errorRequestId, setErrorRequestId] = useState<string | null>(null);
   const [result, setResult] = useState<QueryResponse | null>(null);
   const [lastQuery, setLastQuery] = useState<string>('');
+  const [showAnalytics, setShowAnalytics] = useState(false);
+  const { toasts, removeToast, showSuccess, showError } = useToasts();
 
   const handleSubmitQuery = async (query: string) => {
     setIsLoading(true);
@@ -54,24 +59,44 @@ export default function HomePage() {
           feedback_type: type,
           details
         });
+        showSuccess('Feedback submitted', 'Thank you for your feedback!');
       } catch (error) {
         console.error('Failed to submit feedback:', error);
+        showError('Feedback submission failed', 'Please try again later.');
+        throw error; // Re-throw to let the FeedbackForm handle the error
       }
     }
   };
 
   return (
     <div className="min-h-screen bg-gray-50">
+      {/* Toast Container */}
+      <ToastContainer toasts={toasts} onRemoveToast={removeToast} />
+
+      {/* Analytics Dashboard */}
+      <AnalyticsDashboard 
+        isVisible={showAnalytics} 
+        onClose={() => setShowAnalytics(false)} 
+      />
+
       {/* Header */}
       <header className="bg-white shadow-sm border-b border-gray-200">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center py-4">
             <div className="flex items-center">
               <h1 className="text-2xl font-bold text-gray-900">
-                Universal Knowledge Platform
+                SarvanOM
               </h1>
             </div>
             <nav className="flex items-center space-x-4">
+              <button
+                onClick={() => setShowAnalytics(true)}
+                className="flex items-center space-x-2 text-gray-600 hover:text-gray-900 transition-colors"
+                aria-label="View analytics dashboard"
+              >
+                <ChartBarIcon className="h-5 w-5" />
+                <span>Analytics</span>
+              </button>
               <a
                 href="/about"
                 className="text-gray-600 hover:text-gray-900 transition-colors"
@@ -91,6 +116,29 @@ export default function HomePage() {
 
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {/* Prototype Notice */}
+        <div className="mb-6 bg-blue-50 border border-blue-200 rounded-lg p-4">
+          <div className="flex items-start">
+            <div className="flex-shrink-0">
+              <svg className="h-5 w-5 text-blue-400" viewBox="0 0 20 20" fill="currentColor">
+                <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+              </svg>
+            </div>
+            <div className="ml-3">
+                                        <h3 className="text-sm font-medium text-blue-800">
+                            Early Prototype
+                          </h3>
+                          <div className="mt-2 text-sm text-blue-700">
+                            <p>
+                              This is an early prototype of SarvanOM - Universal Knowledge Platform.
+                              It currently uses a limited built-in knowledge base and may not answer all queries accurately.
+                              Future versions will integrate real search engines and advanced language models.
+                            </p>
+                          </div>
+            </div>
+          </div>
+        </div>
+
         <div className="text-center mb-8">
           <h2 className="text-3xl font-bold text-gray-900 mb-4">
             Ask Anything, Get Accurate Answers
@@ -121,6 +169,8 @@ export default function HomePage() {
               citations={result.citations}
               isLoading={false}
               queryId={result.query_id}
+              queryType={result.query_type}
+              processingTime={result.processing_time}
             />
           </div>
         )}
@@ -199,9 +249,38 @@ export default function HomePage() {
       {/* Footer */}
       <footer className="bg-white border-t border-gray-200 mt-16">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-          <div className="text-center text-gray-600">
-            <p>&copy; 2025 Universal Knowledge Platform. All rights reserved.</p>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+            {/* About */}
+                                    <div>
+                          <h3 className="text-sm font-semibold text-gray-900 mb-3">About</h3>
+                          <p className="text-sm text-gray-600">
+                            SarvanOM is an advanced AI system that uses multiple specialized agents
+                            to provide comprehensive, well-cited answers to complex questions.
+                          </p>
+                        </div>
+            
+            {/* Current Status */}
+            <div>
+              <h3 className="text-sm font-semibold text-gray-900 mb-3">Current Status</h3>
+              <p className="text-sm text-gray-600">
+                This is an early prototype demonstrating the multi-agent architecture. 
+                It uses a limited knowledge base and placeholder responses for testing purposes.
+              </p>
+            </div>
+            
+            {/* Future Plans */}
+            <div>
+              <h3 className="text-sm font-semibold text-gray-900 mb-3">Future Plans</h3>
+              <p className="text-sm text-gray-600">
+                Future versions will integrate real search engines, advanced language models, 
+                and comprehensive knowledge bases for accurate, up-to-date information.
+              </p>
+            </div>
           </div>
+          
+                                <div className="mt-8 pt-8 border-t border-gray-200 text-center text-gray-600">
+                        <p>&copy; 2025 SarvanOM. All rights reserved. | <a href="https://sarvanom.com" className="text-blue-600 hover:text-blue-800">sarvanom.com</a></p>
+                      </div>
         </div>
       </footer>
     </div>

@@ -4,7 +4,7 @@ This module defines consistent data structures for inter-agent communication.
 """
 
 from pydantic import BaseModel, Field
-from typing import Dict, List, Any, Optional, Union
+from typing import Any, Optional, Union
 from enum import Enum
 from dataclasses import dataclass
 from datetime import datetime
@@ -29,7 +29,7 @@ class DocumentModel(AgentDataModel):
     doc_id: str = Field(default="", description="Document ID")
     chunk_id: Optional[str] = Field(default=None, description="Chunk ID")
     timestamp: Optional[str] = Field(default=None, description="Document timestamp")
-    metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
+    metadata: dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
 
 
 class VerifiedFactModel(AgentDataModel):
@@ -38,12 +38,12 @@ class VerifiedFactModel(AgentDataModel):
     claim: str = Field(..., description="The verified claim")
     confidence: float = Field(..., ge=0.0, le=1.0, description="Confidence score")
     source: str = Field(..., description="Source of verification")
-    evidence: List[str] = Field(default_factory=list, description="Supporting evidence")
-    contradicting_evidence: List[str] = Field(
+    evidence: list[str] = Field(default_factory=list, description="Supporting evidence")
+    contradicting_evidence: list[str] = Field(
         default_factory=list, description="Contradicting evidence"
     )
     verification_method: str = Field(..., description="Method used for verification")
-    metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
+    metadata: dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
 
 
 class CitationModel(AgentDataModel):
@@ -66,43 +66,43 @@ class SynthesisResult(AgentDataModel):
     synthesis_method: str = Field(..., description="Method used for synthesis")
     fact_count: int = Field(..., ge=0, description="Number of facts used")
     processing_time_ms: int = Field(..., ge=0, description="Processing time in milliseconds")
-    metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
+    metadata: dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
 
 
 class CitationResult(AgentDataModel):
     """Standardized citation result model."""
 
     cited_content: str = Field(..., description="Content with inline citations")
-    bibliography: List[str] = Field(default_factory=list, description="Full bibliography")
-    in_text_citations: List[Dict[str, Any]] = Field(
+    bibliography: list[str] = Field(default_factory=list, description="Full bibliography")
+    in_text_citations: list[dict[str, Any]] = Field(
         default_factory=list, description="Inline citations"
     )
     citation_style: str = Field(default="APA", description="Citation style used")
-    metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
+    metadata: dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
 
 
 class RetrievalResult(AgentDataModel):
     """Standardized retrieval result model."""
 
-    documents: List[DocumentModel] = Field(default_factory=list, description="Retrieved documents")
+    documents: list[DocumentModel] = Field(default_factory=list, description="Retrieved documents")
     search_type: str = Field(..., description="Type of search performed")
     total_hits: int = Field(..., ge=0, description="Total number of hits")
     query_time_ms: int = Field(..., ge=0, description="Query execution time")
-    metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
+    metadata: dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
 
 
 class FactCheckResult(AgentDataModel):
     """Standardized fact-checking result model."""
 
-    verified_facts: List[VerifiedFactModel] = Field(
+    verified_facts: list[VerifiedFactModel] = Field(
         default_factory=list, description="Verified facts"
     )
-    contested_claims: List[Dict[str, Any]] = Field(
+    contested_claims: list[dict[str, Any]] = Field(
         default_factory=list, description="Contested claims"
     )
     verification_method: str = Field(..., description="Verification method used")
     total_claims: int = Field(..., ge=0, description="Total number of claims processed")
-    metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
+    metadata: dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
 
 
 class AgentTaskModel(AgentDataModel):
@@ -110,8 +110,8 @@ class AgentTaskModel(AgentDataModel):
 
     query: str = Field(..., description="The query to process")
     task_type: str = Field(..., description="Type of task")
-    parameters: Dict[str, Any] = Field(default_factory=dict, description="Task parameters")
-    context: Dict[str, Any] = Field(default_factory=dict, description="Additional context")
+    parameters: dict[str, Any] = Field(default_factory=dict, description="Task parameters")
+    context: dict[str, Any] = Field(default_factory=dict, description="Additional context")
     priority: int = Field(default=2, ge=1, le=5, description="Task priority (1-5)")
     timeout_ms: int = Field(default=5000, ge=0, description="Task timeout in milliseconds")
 
@@ -120,14 +120,14 @@ class AgentResponseModel(AgentDataModel):
     """Standardized response model for agent results."""
 
     success: bool = Field(..., description="Whether the task was successful")
-    data: Optional[Dict[str, Any]] = Field(default=None, description="Response data")
+    data: Optional[dict[str, Any]] = Field(default=None, description="Response data")
     confidence: float = Field(default=0.0, ge=0.0, le=1.0, description="Confidence score")
     error: Optional[str] = Field(default=None, description="Error message if failed")
     execution_time_ms: int = Field(default=0, ge=0, description="Execution time in milliseconds")
-    token_usage: Dict[str, int] = Field(
+    token_usage: dict[str, int] = Field(
         default_factory=lambda: {"prompt": 0, "completion": 0}, description="Token usage"
     )
-    metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
+    metadata: dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
 
 
 # Legacy compatibility models for backward compatibility
@@ -139,23 +139,23 @@ class LegacySynthesisResult(AgentDataModel):
     synthesis_method: str = Field(..., description="Method used for synthesis")
     fact_count: int = Field(..., ge=0, description="Number of facts used")
     processing_time_ms: int = Field(..., ge=0, description="Processing time in milliseconds")
-    metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
+    metadata: dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
 
 
 class LegacyCitationResult(AgentDataModel):
     """Legacy citation result with both 'bibliography' and 'citations' keys for compatibility."""
 
     cited_content: str = Field(..., description="Content with inline citations")
-    bibliography: List[str] = Field(default_factory=list, description="Full bibliography")
-    citations: List[str] = Field(
+    bibliography: list[str] = Field(default_factory=list, description="Full bibliography")
+    citations: list[str] = Field(
         default_factory=list, description="Legacy citations field (same as bibliography)"
     )
     citation_style: str = Field(default="APA", description="Citation style used")
-    metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
+    metadata: dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
 
 
 # Utility functions for data conversion
-def convert_to_standard_synthesis(data: Dict[str, Any]) -> SynthesisResult:
+def convert_to_standard_synthesis(data: dict[str, Any]) -> SynthesisResult:
     """Convert legacy synthesis data to standardized format."""
     # Handle both 'answer' and 'response' keys
     answer = data.get("answer") or data.get("response", "")
@@ -169,7 +169,7 @@ def convert_to_standard_synthesis(data: Dict[str, Any]) -> SynthesisResult:
     )
 
 
-def convert_to_standard_citation(data: Dict[str, Any]) -> CitationResult:
+def convert_to_standard_citation(data: dict[str, Any]) -> CitationResult:
     """Convert legacy citation data to standardized format."""
     # Handle both 'bibliography' and 'citations' keys
     bibliography = data.get("bibliography", [])
@@ -185,7 +185,7 @@ def convert_to_standard_citation(data: Dict[str, Any]) -> CitationResult:
     )
 
 
-def convert_to_standard_retrieval(data: Dict[str, Any]) -> RetrievalResult:
+def convert_to_standard_retrieval(data: dict[str, Any]) -> RetrievalResult:
     """Convert legacy retrieval data to standardized format."""
     documents = []
     for doc_data in data.get("documents", []):
@@ -214,7 +214,7 @@ def convert_to_standard_retrieval(data: Dict[str, Any]) -> RetrievalResult:
     )
 
 
-def convert_to_standard_factcheck(data: Dict[str, Any]) -> FactCheckResult:
+def convert_to_standard_factcheck(data: dict[str, Any]) -> FactCheckResult:
     """Convert legacy fact-checking data to standardized format."""
     verified_facts = []
     for fact_data in data.get("verified_facts", []):
@@ -244,7 +244,7 @@ def convert_to_standard_factcheck(data: Dict[str, Any]) -> FactCheckResult:
 
 
 # Data validation functions
-def validate_agent_data(data: Dict[str, Any], expected_type: str) -> bool:
+def validate_agent_data(data: dict[str, Any], expected_type: str) -> bool:
     """Validate agent data against expected type."""
     try:
         if expected_type == "synthesis":
@@ -262,7 +262,7 @@ def validate_agent_data(data: Dict[str, Any], expected_type: str) -> bool:
         return False
 
 
-def get_standardized_keys() -> Dict[str, List[str]]:
+def get_standardized_keys() -> dict[str, list[str]]:
     """Get standardized keys for each agent type."""
     return {
         "synthesis": ["answer", "synthesis_method", "fact_count", "processing_time_ms"],

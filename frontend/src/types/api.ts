@@ -19,6 +19,7 @@ export interface QueryResponse {
   citations: Citation[];
   query_id?: string;
   processing_time?: number;
+  query_type?: 'cached' | 'fresh' | 'reprocessed';
 }
 
 export interface ApiError {
@@ -33,10 +34,12 @@ export interface FeedbackRequest {
 }
 
 export interface AnalyticsData {
-  total_queries: number;
+  total_requests: number;
+  total_errors: number;
   average_response_time: number;
   cache_hit_rate: number;
-  top_queries: string[];
+  popular_queries: Record<string, number>;
+  timestamp: string;
 }
 
 export interface User {

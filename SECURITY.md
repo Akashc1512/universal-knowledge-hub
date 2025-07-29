@@ -31,6 +31,84 @@ Please include the requested information listed below (as much as you can provid
 
 This information will help us triage your report more quickly.
 
+## Deployment Security Considerations
+
+### Production Security Requirements
+
+⚠️ **CRITICAL: Change Default API Keys Before Production Deployment**
+
+The following default API keys are included in the repository for development purposes and **MUST be changed** before any production deployment:
+
+- **Default User Key**: `user-key-456`
+- **Default Admin Key**: `admin-key-123`
+
+**Action Required:**
+1. Generate new secure API keys using a cryptographically secure random generator
+2. Update environment variables in production deployment
+3. Never commit production API keys to version control
+4. Use secrets management systems (AWS Secrets Manager, HashiCorp Vault, etc.)
+
+### Known Issues and Resolutions
+
+#### ✅ Resolved Issues
+
+1. **SQL Injection Protection**: Implemented comprehensive input validation and parameterized queries
+2. **XSS Protection**: Added content security policies and input sanitization
+3. **Container Security**: Dockerfile creates non-root user "appuser" for secure container execution
+4. **Health Checks**: Backend health check implemented at `/health` endpoint
+5. **CORS Configuration**: Proper CORS settings for cross-origin requests
+6. **Rate Limiting**: Implemented rate limiting to prevent abuse
+7. **Input Validation**: Comprehensive validation for all API endpoints
+
+#### ⚠️ Known Issues (Development/Prototype Phase)
+
+1. **Feedback Endpoint Security**: The feedback endpoint currently has no authentication
+   - **Impact**: Low (prototype phase)
+   - **Recommendation**: Implement authentication if deployed publicly
+   - **Status**: Acceptable for development, needs review for production
+
+2. **Default API Keys**: Hardcoded default keys in repository
+   - **Impact**: High if deployed with defaults
+   - **Status**: Must be changed before production deployment
+
+3. **Frontend Health Check**: No dedicated health check endpoint
+   - **Impact**: Low (Next.js serves static files)
+   - **Status**: Acceptable, can use root path `/` for health checks
+
+### Container Security
+
+#### ✅ Implemented Security Measures
+
+1. **Non-Root User**: Dockerfile creates and uses non-root user "appuser"
+2. **Minimal Base Images**: Uses official Python and Node.js Alpine images
+3. **Multi-Stage Builds**: Reduces attack surface in production images
+4. **Health Checks**: Comprehensive health monitoring
+5. **Resource Limits**: Container resource constraints
+6. **Secrets Management**: Environment variables for configuration
+
+#### File Permissions
+
+The Dockerfile ensures proper file permissions:
+- Application files owned by non-root user
+- Read permissions for configuration files
+- Write permissions only for necessary directories (logs, cache)
+
+### Environment-Specific Security
+
+#### Development Environment
+- **API Keys**: Default keys acceptable for local development
+- **Authentication**: Minimal for rapid prototyping
+- **Logging**: Verbose logging for debugging
+- **CORS**: Permissive for local development
+
+#### Production Environment
+- **API Keys**: Must use secure, randomly generated keys
+- **Authentication**: Full authentication required
+- **Logging**: Structured logging with sensitive data filtering
+- **CORS**: Restrictive CORS policies
+- **HTTPS**: TLS/SSL encryption required
+- **Secrets Management**: Use external secrets management
+
 ## Security Features
 
 ### Authentication & Authorization
@@ -91,6 +169,28 @@ This information will help us triage your report more quickly.
 3. **Session Management**: Log out when finished and use secure connections
 4. **Phishing Awareness**: Be aware of phishing attempts
 5. **Reporting**: Report suspicious activities immediately
+
+## Production Deployment Checklist
+
+### Pre-Deployment Security Review
+
+- [ ] Change default API keys to secure, randomly generated keys
+- [ ] Configure proper secrets management
+- [ ] Enable HTTPS/TLS encryption
+- [ ] Set up proper CORS policies
+- [ ] Configure authentication for all endpoints
+- [ ] Set up monitoring and alerting
+- [ ] Configure backup and disaster recovery
+- [ ] Test security controls
+
+### Post-Deployment Security
+
+- [ ] Monitor for security events
+- [ ] Regular security updates
+- [ ] Vulnerability scanning
+- [ ] Penetration testing
+- [ ] Security incident response plan
+- [ ] Regular security audits
 
 ## Compliance
 
@@ -215,4 +315,5 @@ We would like to thank the security researchers and community members who have h
 - **2024-01-01**: Initial security policy document
 - **2024-01-15**: Added GDPR compliance section
 - **2024-02-01**: Updated incident response procedures
-- **2024-03-01**: Added SOC 2 compliance information 
+- **2024-03-01**: Added SOC 2 compliance information
+- **2024-12-28**: Added deployment security considerations and production checklist 

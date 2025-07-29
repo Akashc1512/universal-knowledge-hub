@@ -120,27 +120,90 @@ class SynthesisAgent(BaseAgent):
         if not verified_facts:
             return "I don't have enough verified information to provide a comprehensive answer."
 
-        # Build prompt
-        facts_text = "\n".join(
-            f"- {f.get('claim', '')} (confidence: {f.get('confidence', 0):.2f})"
-            for f in verified_facts
-        )
-        prompt = (
-            f"You are an expert assistant. Given the following user question and a set of verified facts, synthesize a clear, concise, and accurate answer.\n"
-            f"User question: {query}\n"
-            f"Verified facts:\n{facts_text}\n"
-            f"Answer:"
-        )
         try:
-            llm = LLMClient()
-            return llm.synthesize(prompt, max_tokens=params.get("max_length", 500), temperature=0.2)
+            # Build comprehensive prompt for LLM synthesis
+            facts_text = "\n".join(
+                f"- {f.get('claim', '')} (confidence: {f.get('confidence', 0):.2f})"
+                for f in verified_facts
+            )
+            
+            synthesis_prompt = f"""
+            You are an expert assistant tasked with synthesizing a comprehensive answer based on verified facts.
+            
+            User Question: {query}
+            
+            Verified Facts:
+            {facts_text}
+            
+            Instructions:
+            1. Synthesize a clear, coherent, and accurate answer based on the verified facts
+            2. Address the user's question directly and comprehensively
+            3. Use only the provided verified facts - do not add information not supported by the facts
+            4. If the facts are insufficient to answer the question, acknowledge this clearly
+            5. Structure your response logically and make it easy to understand
+            6. Keep the response concise but complete (max {params.get('max_length', 500)} words)
+            
+            Answer:"""
+            
+            # Use LLM for synthesis
+            from agents.llm_client import LLMClient
+            llm_client = LLMClient()
+            
+            response = await llm_client.generate_text(
+                synthesis_prompt, 
+                max_tokens=params.get("max_length", 500),
+                temperature=0.3  # Lower temperature for more factual responses
+            )
+            
+            if response and response.strip():
+                return response.strip()
+            else:
+                # Fallback to rule-based synthesis if LLM fails
+                return self._fallback_synthesis(verified_facts, query)
+                
         except Exception as e:
             logger.error(f"LLM synthesis error: {e}")
             # Fallback to rule-based synthesis
-            answer_parts = ["Based on verified information:"]
+            return self._fallback_synthesis(verified_facts, query)
+    
+    def _fallback_synthesis(self, verified_facts: List[Dict], query: str) -> str:
+        """
+        Fallback synthesis method when LLM is unavailable.
+        
+        Args:
+            verified_facts: List of verified facts
+            query: Original user query
+            
+        Returns:
+            Synthesized answer
+        """
+        if not verified_facts:
+            return "I don't have enough verified information to provide a comprehensive answer."
+        
+        # Group facts by confidence level
+        high_conf_facts = [f for f in verified_facts if f.get("confidence", 0) >= 0.8]
+        medium_conf_facts = [f for f in verified_facts if 0.5 <= f.get("confidence", 0) < 0.8]
+        low_conf_facts = [f for f in verified_facts if f.get("confidence", 0) < 0.5]
+        
+        # Build answer based on confidence levels
+        answer_parts = []
+        
+        if high_conf_facts:
+            answer_parts.append("Based on high-confidence verified information:")
+            for fact in high_conf_facts[:3]:  # Limit to top 3 high-confidence facts
+                answer_parts.append(f"• {fact.get('claim', '')}")
+        
+        if medium_conf_facts and len(answer_parts) < 4:
+            answer_parts.append("\nAdditional verified information:")
+            for fact in medium_conf_facts[:2]:  # Add up to 2 medium-confidence facts
+                answer_parts.append(f"• {fact.get('claim', '')}")
+        
+        if not answer_parts:
+            answer_parts.append("Based on available information:")
             for fact in verified_facts[:3]:
                 answer_parts.append(f"• {fact.get('claim', '')}")
-            return "\n".join(answer_parts)
+        
+        return "\n".join(answer_parts)
 
     def _calculate_synthesis_confidence(self, verified_facts: List[Dict]) -> float:
         """

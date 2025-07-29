@@ -36,6 +36,7 @@ from pydantic import BaseModel, Field
 from enum import Enum
 import json
 import yaml
+import logging
 
 from api.config import get_settings
 from api.models import (
@@ -591,10 +592,11 @@ response = requests.post(
 
 if response.status_code == 200:
     result = response.json()
-    print(f"Answer: {result['result']}")
-    print(f"Confidence: {result['confidence']}")
+    logger.info(f"Query successful - Answer: {result['result'][:100]}...")
+    logger.debug(f"Query confidence: {result['confidence']}")
 else:
-    print(f"Error: {response.json()}")
+    error_details = response.json() if response.content else {"error": "Unknown error"}
+    logger.error(f"Query failed with status {response.status_code}: {error_details}")
 """,
             "javascript": """
 const axios = require('axios');

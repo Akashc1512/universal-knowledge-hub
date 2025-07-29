@@ -1,215 +1,258 @@
-# 🧠 SarvanOM - Your Own Knowledge Hub Powered by AI
+# Universal Knowledge Platform
 
-[![SarvanOM](https://img.shields.io/badge/SarvanOM-AI%20Knowledge%20Hub-blue?style=for-the-badge&logo=ai)](https://sarvanom.ai)
-[![Python](https://img.shields.io/badge/Python-3.9+-blue?style=for-the-badge&logo=python)](https://python.org)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-green?style=for-the-badge&logo=fastapi)](https://fastapi.tiangolo.com)
-[![Next.js](https://img.shields.io/badge/Next.js-15.4+-black?style=for-the-badge&logo=next.js)](https://nextjs.org)
-[![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)](LICENSE)
+A production-ready AI platform that uses a multi-agent pipeline to provide comprehensive, well-cited answers to complex questions.
 
-> **Your Own Knowledge Hub Powered by AI** - A comprehensive AI-powered knowledge platform that provides accurate, verifiable answers with high transparency and source citations.
+**🌐 Domain**: [sarvanom.com](https://sarvanom.com)
 
-## 🌟 Features
+## 🚀 Current Status
 
-### 🤖 **Multi-Agent AI System**
-- **Retrieval Agent**: Intelligent document search and retrieval
-- **Fact-Check Agent**: Verification of claims and information accuracy
-- **Synthesis Agent**: AI-powered answer generation and synthesis
-- **Citation Agent**: Automatic source citation and attribution
+**Phase**: Working Prototype → Production-Ready AI Platform
 
-### 🔍 **Advanced Search & Retrieval**
-- Vector database integration (Pinecone, Qdrant)
-- Elasticsearch for full-text search
-- Knowledge graph integration (SPARQL)
-- Semantic caching for improved performance
+The Universal Knowledge Platform is currently a **functional prototype** with a solid foundation ready for AI integration. The system includes:
 
-### 🛡️ **Security & Compliance**
-- API key authentication
-- Rate limiting and threat detection
-- GDPR-compliant data handling
-- Comprehensive audit logging
+### ✅ What's Working Now
 
-### 📊 **Monitoring & Analytics**
-- Real-time Prometheus metrics
-- Health monitoring and alerting
-- Performance analytics
-- Usage tracking and insights
+- **Multi-Agent Architecture**: Functional pipeline with Retrieval, Fact-Check, Synthesis, and Citation agents
+- **Modern Web Interface**: React/Next.js frontend with real-time feedback and analytics
+- **RESTful API**: FastAPI backend with comprehensive error handling and validation
+- **Python 3.13.5**: Latest Python version with enhanced performance and features
+- **CI/CD Pipeline**: Automated testing, linting, security scanning, and quality gates
+- **Security Foundation**: Input validation, rate limiting, security scanning, and health checks
+- **Monitoring**: Health checks, logging, and basic analytics dashboard
 
-### 🎨 **Modern Frontend**
-- Next.js 15 with TypeScript
-- Tailwind CSS for responsive design
-- Heroicons for beautiful UI components
-- Accessibility compliant (WCAG 2.1 AA)
+### 🔄 Next Steps: AI Integration
+
+The platform is designed to integrate with real AI services. See [ROADMAP.md](./ROADMAP.md) for detailed development phases:
+
+1. **Phase 1**: OpenAI API integration for embeddings and answer generation
+2. **Phase 2**: Vector database (Pinecone) for document storage and retrieval
+3. **Phase 3**: Expert validation system and advanced UI features
+4. **Phase 4**: Production scaling and enterprise features
+
+## 🏗️ Architecture
+
+```
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│   Frontend      │    │   Backend       │    │   AI Services   │
+│   (Next.js)     │◄──►│   (FastAPI)     │◄──►│   (OpenAI)      │
+│                 │    │                 │    │                 │
+│ • Query Form    │    │ • Multi-Agent   │    │ • Embeddings    │
+│ • Answer Display│    │   Pipeline      │    │ • Text Gen      │
+│ • Analytics     │    │ • Rate Limiting │    │ • Web Search    │
+│ • Expert UI     │    │ • Security      │    │ • Fact Check    │
+└─────────────────┘    └─────────────────┘    └─────────────────┘
+         │                       │                       │
+         │                       │                       │
+         ▼                       ▼                       ▼
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│   Vector DB     │    │   SQLite/Redis  │    │   Knowledge     │
+│   (Pinecone)    │    │   (Analytics)   │    │   Sources       │
+│                 │    │                 │    │                 │
+│ • Document      │    │ • User Data     │    │ • Wikipedia     │
+│   Storage       │    │ • Query History │    │ • Academic DBs  │
+│ • Semantic      │    │ • Analytics     │    │ • News APIs     │
+│   Search        │    │ • Feedback      │    │ • Expert Data   │
+└─────────────────┘    └─────────────────┘    └─────────────────┘
+```
 
 ## 🚀 Quick Start
 
 ### Prerequisites
-- Python 3.9+
-- Node.js 18+
-- Docker (optional)
 
-### Backend Setup
+- **Python 3.13.5** (required)
+- **Node.js 18+** (for frontend development)
+- **Git** (for version control)
+
+### Development Setup
+
+1. **Clone the repository**:
+   ```bash
+   git clone https://github.com/your-org/universal-knowledge-hub.git
+   cd universal-knowledge-hub
+   ```
+
+2. **Set up Python environment**:
+   ```bash
+   # Windows (PowerShell)
+   .\scripts\setup_python313.ps1
+   
+   # macOS/Linux
+   chmod +x scripts/setup_python313.sh
+   ./scripts/setup_python313.sh
+   ```
+
+3. **Configure environment variables**:
+   ```bash
+   # Copy environment template
+   cp env.template .env
+   
+   # Edit .env with your API keys
+   # See GET_API_KEYS_GUIDE.md for required keys
+   ```
+
+4. **Start development servers**:
+   ```bash
+   # Activate virtual environment
+   .venv\Scripts\activate  # Windows
+   source .venv/bin/activate  # macOS/Linux
+   
+   # Start backend
+   uvicorn api.main:app --reload --port 8000
+   
+   # Start frontend (in new terminal)
+   cd frontend
+   npm run dev
+   ```
+
+5. **Access the application**:
+   - Frontend: http://localhost:3000
+   - Backend API: http://localhost:8000
+   - API Documentation: http://localhost:8000/docs
+
+### Local Development
+
+1. **Backend Development**:
+   ```bash
+   # Activate virtual environment
+   .venv\Scripts\activate  # Windows
+   source .venv/bin/activate  # macOS/Linux
+   
+   # Run tests
+   pytest
+   
+   # Run with coverage
+   pytest --cov=agents --cov=api --cov-report=html
+   
+   # Start development server
+   uvicorn api.main:app --reload --port 8000
+   ```
+
+2. **Frontend Development**:
+   ```bash
+   cd frontend
+   
+   # Install dependencies
+   npm install
+   
+   # Start development server
+   npm run dev
+   
+   # Run tests
+   npm test
+   
+   # Build for production
+   npm run build
+   ```
+
+3. **Code Quality**:
+   ```bash
+   # Format code
+   black .
+   
+   # Lint code
+   flake8 .
+   
+   # Type checking
+   mypy .
+   
+   # Security audit
+   bandit -r .
+   ```
+
+## 📚 Documentation
+
+- **[LOCAL_DEV_SETUP.md](./LOCAL_DEV_SETUP.md)**: Detailed local development setup
+- **[MAANG_CODING_STANDARDS.md](./MAANG_CODING_STANDARDS.md)**: Coding standards and best practices
+- **[GET_API_KEYS_GUIDE.md](./GET_API_KEYS_GUIDE.md)**: How to get required API keys
+- **[AUTHENTICATION_GUIDE.md](./AUTHENTICATION_GUIDE.md)**: Authentication and security setup
+- **[DEPLOYMENT_GUIDE.md](./DEPLOYMENT_GUIDE.md)**: Production deployment guide
+- **[ROADMAP.md](./ROADMAP.md)**: Development roadmap and milestones
+
+## 🧪 Testing
+
+### Run All Tests
 ```bash
-# Clone the repository
-git clone https://github.com/Akashc1512/sarvanom.git
-cd sarvanom
+# Unit tests
+pytest
 
-# Create virtual environment
-python -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+# Integration tests
+pytest -m integration
 
-# Install dependencies
-pip install -r requirements.txt
+# Performance tests
+pytest tests/performance/
 
-# Set up environment variables
-cp env.template .env
-# Edit .env with your API keys and configuration
-
-# Start the backend
-python -m uvicorn api.main:app --host 0.0.0.0 --port 8002 --reload
+# Bulletproof test suite
+python tests/run_bulletproof_tests.py
 ```
 
-### Frontend Setup
+### Test Coverage
 ```bash
-# Navigate to frontend directory
-cd frontend
+# Generate coverage report
+pytest --cov=agents --cov=api --cov-report=html
 
-# Install dependencies
-npm install
-
-# Set up environment variables
-cp env.example .env.local
-# Edit .env.local with your backend API URL
-
-# Start the frontend
-npm run dev
+# View coverage report
+# Open htmlcov/index.html in browser
 ```
-
-### Docker Setup
-```bash
-# Using Docker Compose
-docker-compose up -d
-
-# Or build and run manually
-docker build -t sarvanom .
-docker run -p 8002:8002 sarvanom
-```
-
-## 📖 API Documentation
-
-Once the backend is running, visit:
-- **API Docs**: http://localhost:8002/docs
-- **Health Check**: http://localhost:8002/health
-- **Metrics**: http://localhost:8002/metrics
-
-### Example API Usage
-```bash
-# Query the knowledge hub
-curl -X POST "http://localhost:8002/query" \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer your-api-key" \
-  -d '{
-    "query": "What is artificial intelligence?",
-    "max_tokens": 1000,
-    "confidence_threshold": 0.8
-  }'
-```
-
-## 🏗️ Architecture
-
-### Backend Components
-- **FastAPI Application**: RESTful API with authentication
-- **Multi-Agent Orchestrator**: Coordinates AI agents
-- **Security Layer**: Threat detection and rate limiting
-- **Caching System**: Multi-level semantic caching
-- **Monitoring**: Prometheus metrics and health checks
-
-### Frontend Components
-- **Next.js 15**: React framework with App Router
-- **TypeScript**: Full type safety
-- **Tailwind CSS**: Utility-first styling
-- **Component Library**: Modular, reusable UI components
-
-### Infrastructure
-- **Docker**: Multi-stage builds for production
-- **Kubernetes**: Complete orchestration manifests
-- **CI/CD**: GitHub Actions with automated testing
-- **Monitoring**: Prometheus metrics and Grafana dashboards
 
 ## 🔧 Configuration
 
 ### Environment Variables
-```bash
-# Backend Configuration
-UKP_HOST=0.0.0.0
-UKP_PORT=8002
-OPENAI_API_KEY=your-openai-key
-ANTHROPIC_API_KEY=your-anthropic-key
+Create a `.env` file with the following variables:
+
+```env
+# API Keys (see GET_API_KEYS_GUIDE.md)
+OPENAI_API_KEY=your_openai_key
+ANTHROPIC_API_KEY=your_anthropic_key
+PINECONE_API_KEY=your_pinecone_key
+ELASTICSEARCH_URL=your_elasticsearch_url
 
 # Database Configuration
-VECTOR_DB_URL=your-vector-db-url
-ELASTICSEARCH_URL=your-elasticsearch-url
-REDIS_URL=your-redis-url
+DATABASE_URL=sqlite:///./data/app.db
 
-# Security Configuration
-API_KEY_SECRET=your-api-key-secret
-RATE_LIMIT_PER_MINUTE=60
-THREAT_DETECTION_ENABLED=true
+# Security
+SECRET_KEY=your_secret_key
+JWT_SECRET_KEY=your_jwt_secret
 
-# Frontend Configuration
-NEXT_PUBLIC_API_BASE_URL=http://localhost:8002
+# Redis Configuration (optional)
+REDIS_URL=redis://localhost:6379
+
+# Logging
+LOG_LEVEL=INFO
 ```
 
-## 📊 Performance & Scalability
+## 🚀 Deployment
 
-- **Concurrent Requests**: Up to 100 simultaneous queries
-- **Response Time**: < 5 seconds for complex queries
-- **Caching**: Multi-level semantic caching
-- **Load Balancing**: Kubernetes-ready deployment
-- **Monitoring**: Real-time performance metrics
+### Production Deployment
+See [DEPLOYMENT_GUIDE.md](./DEPLOYMENT_GUIDE.md) for detailed production deployment instructions.
 
-## 🛡️ Security Features
-
-- **Authentication**: API key-based authentication
-- **Rate Limiting**: Configurable request limits
-- **Threat Detection**: SQL injection, XSS, path traversal protection
-- **Data Privacy**: GDPR-compliant data handling
-- **Audit Logging**: Comprehensive security event logging
+### Docker Deployment (Optional)
+For containerized deployment, see the infrastructure directory for Kubernetes and Terraform configurations.
 
 ## 🤝 Contributing
 
-We welcome contributions! Please see our [Contributing Guidelines](CONTRIBUTING.md) for details.
-
-### Development Setup
-```bash
-# Install development dependencies
-pip install -r requirements-dev.txt
-
-# Run tests
-pytest tests/
-
-# Run linting
-flake8 api/
-black api/
-```
+1. **Fork the repository**
+2. **Create a feature branch**: `git checkout -b feature/amazing-feature`
+3. **Follow coding standards**: See [MAANG_CODING_STANDARDS.md](./MAANG_CODING_STANDARDS.md)
+4. **Write tests**: Ensure all new features have comprehensive tests
+5. **Commit changes**: `git commit -m 'Add amazing feature'`
+6. **Push to branch**: `git push origin feature/amazing-feature`
+7. **Open a Pull Request**
 
 ## 📄 License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## 🌐 Links
+## 🆘 Support
 
-- **Website**: [https://sarvanom.ai](https://sarvanom.ai)
-- **Documentation**: [https://docs.sarvanom.ai](https://docs.sarvanom.ai)
-- **API Reference**: [https://api.sarvanom.ai](https://api.sarvanom.ai)
-- **GitHub**: [https://github.com/Akashc1512/sarvanom](https://github.com/Akashc1512/sarvanom)
+- **Documentation**: Check the `documentation/` directory
+- **Issues**: Create an issue on GitHub
+- **Discussions**: Use GitHub Discussions for questions
+- **Setup Help**: Run `python scripts/verify_setup.py` for diagnostics
 
-## 🙏 Acknowledgments
+## 🏆 Acknowledgments
 
-- Built with FastAPI and Next.js
-- Powered by OpenAI and Anthropic AI
-- Vector search by Pinecone and Qdrant
-- Monitoring with Prometheus and Grafana
-
----
-
-**SarvanOM** - Your Own Knowledge Hub Powered by AI 🧠✨
+- **FastAPI** for the excellent web framework
+- **Next.js** for the React framework
+- **OpenAI** for AI capabilities
+- **Pinecone** for vector database
+- **MAANG-level standards** for code quality

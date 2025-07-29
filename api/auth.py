@@ -15,6 +15,8 @@ from fastapi import HTTPException, Depends, Request, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials, OAuth2PasswordBearer
 import logging
 
+from api.exceptions import ConfigurationError
+
 logger = logging.getLogger(__name__)
 
 # Security configuration
@@ -22,37 +24,218 @@ SECRET_KEY = os.getenv("SECRET_KEY", secrets.token_urlsafe(32))
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
 
-# API Key configuration
-API_KEYS = {
-    os.getenv("ADMIN_API_KEY", "admin-key-123"): {
+# Environment-based API Key configuration
+def _load_api_keys():
+    """Load API keys from environment or generate secure defaults for development."""
+    api_keys = {}
+    
+    # Only use hardcoded keys in development if no environment keys are set
+    if os.getenv("ENVIRONMENT") == "development" and not os.getenv("ADMIN_API_KEY"):
+        logger.warning("Using development API keys - NOT SECURE FOR PRODUCTION")
+        api_keys.update({
+            "admin-dev-key": {
+                "role": "admin",
+                "permissions": ["read", "write", "admin"],
+                "rate_limit": 1000,
+                "description": "Development Admin Key - INSECURE",
+            },
+            "user-dev-key": {
+                "role": "user",
+                "permissions": ["read", "write"],
+                "rate_limit": 100,
+                "description": "Development User Key - INSECURE",
+            },
+            "readonly-dev-key": {
+                "role": "readonly",
+                "permissions": ["read"],
+                "rate_limit": 50,
+                "description": "Development Readonly Key - INSECURE",
+            },
+        })
+    
+    # Load from environment variables (production)
+    admin_key = os.getenv("ADMIN_API_KEY")
+    if admin_key:
+        api_keys[admin_key] = {
+            "role": "admin",
+            "permissions": ["read", "write", "admin"],
+            "rate_limit": int(os.getenv("ADMIN_RATE_LIMIT", "1000")),
+            "description": "Production Admin API Key",
+        }
+    
+    user_key = os.getenv("USER_API_KEY")
+    if user_key:
+        api_keys[user_key] = {
+            "role": "user",
+            "permissions": ["read", "write"],
+            "rate_limit": int(os.getenv("USER_RATE_LIMIT", "100")),
+            "description": "Production User API Key",
+        }
+    
+    readonly_key = os.getenv("READONLY_API_KEY")
+    if readonly_key:
+        api_keys[readonly_key] = {
+            "role": "readonly",
+            "permissions": ["read"],
+            "rate_limit": int(os.getenv("READONLY_RATE_LIMIT", "50")),
+            "description": "Production Readonly API Key",
+        }
+    
+    # Warn if no API keys are configured
+    if not api_keys:
+        logger.error("No API keys configured! Set ADMIN_API_KEY, USER_API_KEY, or READONLY_API_KEY environment variables.")
+        raise ConfigurationError("authentication", "No API keys configured", "Set API key environment variables")
+    
+    return api_keys
+
+# Load API keys at startup
+API_KEYS = _load_api_keys()
+
+# User database (in production, use a real database)
+USERS_DB = {
+    "admin": {
+        "password_hash": "hashed_password_here",  # In production, use proper hashing
         "role": "admin",
         "permissions": ["read", "write", "admin"],
-        "rate_limit": 1000,
-        "description": "Admin API Key",
+        "api_keys": ["admin-key-123"],
     },
-    os.getenv("USER_API_KEY", "user-key-456"): {
-        "role": "user",
+    "user1": {
+        "password_hash": "hashed_password_here",
+        "role": "user", 
         "permissions": ["read", "write"],
-        "rate_limit": 100,
-        "description": "User API Key",
+        "api_keys": ["user-key-456"],
     },
-    os.getenv("READONLY_API_KEY", "readonly-key-789"): {
+    "readonly_user": {
+        "password_hash": "hashed_password_here",
         "role": "readonly",
         "permissions": ["read"],
-        "rate_limit": 50,
-        "description": "Read-only API Key",
+        "api_keys": ["readonly-key-789"],
     },
 }
+
+# API Key management
+API_KEY_REGISTRY = {}
+
+def generate_api_key(user_id: str, role: str, permissions: List[str]) -> str:
+    """Generate a new API key for a user."""
+    api_key = f"{user_id}-{secrets.token_urlsafe(16)}"
+    API_KEY_REGISTRY[api_key] = {
+        "user_id": user_id,
+        "role": role,
+        "permissions": permissions,
+        "rate_limit": 100 if role == "user" else 50 if role == "readonly" else 1000,
+        "description": f"API Key for {user_id}",
+        "created_at": datetime.now(),
+    }
+    return api_key
+
+def revoke_api_key(api_key: str) -> bool:
+    """Revoke an API key."""
+    if api_key in API_KEY_REGISTRY:
+        del API_KEY_REGISTRY[api_key]
+        return True
+    return False
+
+def get_user_api_keys(user_id: str) -> List[str]:
+    """Get all API keys for a user."""
+    return [
+        key for key, data in API_KEY_REGISTRY.items() 
+        if data["user_id"] == user_id
+    ]
 
 # OAuth configuration (for future use)
 OAUTH_CONFIG = {
     "google": {
         "client_id": os.getenv("GOOGLE_CLIENT_ID"),
         "client_secret": os.getenv("GOOGLE_CLIENT_SECRET"),
-        "authorization_url": "https://accounts.google.com/o/oauth2/auth",
-        "token_url": "https://oauth2.googleapis.com/token",
-    }
+        "redirect_uri": os.getenv("GOOGLE_REDIRECT_URI"),
+    },
+    "github": {
+        "client_id": os.getenv("GITHUB_CLIENT_ID"),
+        "client_secret": os.getenv("GITHUB_CLIENT_SECRET"),
+        "redirect_uri": os.getenv("GITHUB_REDIRECT_URI"),
+    },
 }
+
+# Password hashing utilities
+def hash_password(password: str) -> str:
+    """Hash a password using bcrypt."""
+    import bcrypt
+    salt = bcrypt.gensalt()
+    hashed = bcrypt.hashpw(password.encode('utf-8'), salt)
+    return hashed.decode('utf-8')
+
+def verify_password(password: str, hashed: str) -> bool:
+    """Verify a password against its hash."""
+    import bcrypt
+    return bcrypt.checkpw(password.encode('utf-8'), hashed.encode('utf-8'))
+
+# Login and registration functions
+async def authenticate_user(username: str, password: str) -> Optional[Dict[str, Any]]:
+    """Authenticate a user with username and password."""
+    if username not in USERS_DB:
+        return None
+    
+    user_data = USERS_DB[username]
+    if verify_password(password, user_data["password_hash"]):
+        return {
+            "user_id": username,
+            "role": user_data["role"],
+            "permissions": user_data["permissions"],
+        }
+    return None
+
+async def register_user(username: str, password: str, role: str = "user") -> Optional[str]:
+    """Register a new user and return their API key."""
+    if username in USERS_DB:
+        return None  # User already exists
+    
+    # Hash password
+    hashed_password = hash_password(password)
+    
+    # Determine permissions based on role
+    permissions = ["read", "write"] if role == "user" else ["read"] if role == "readonly" else ["read", "write", "admin"]
+    
+    # Add user to database
+    USERS_DB[username] = {
+        "password_hash": hashed_password,
+        "role": role,
+        "permissions": permissions,
+        "api_keys": [],
+    }
+    
+    # Generate API key
+    api_key = generate_api_key(username, role, permissions)
+    USERS_DB[username]["api_keys"].append(api_key)
+    
+    return api_key
+
+async def login_user(username: str, password: str) -> Optional[Dict[str, Any]]:
+    """Login a user and return access token and API key."""
+    user_data = await authenticate_user(username, password)
+    if not user_data:
+        return None
+    
+    # Generate access token
+    access_token = JWTAuth.create_access_token(
+        data={"sub": user_data["user_id"], "role": user_data["role"]}
+    )
+    
+    # Get or generate API key
+    api_keys = get_user_api_keys(user_data["user_id"])
+    if not api_keys:
+        api_key = generate_api_key(user_data["user_id"], user_data["role"], user_data["permissions"])
+    else:
+        api_key = api_keys[0]
+    
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "api_key": api_key,
+        "user_id": user_data["user_id"],
+        "role": user_data["role"],
+        "permissions": user_data["permissions"],
+    }
 
 # User sessions (in production, use Redis or database)
 user_sessions = {}
@@ -106,12 +289,32 @@ class APIKeyAuth:
     @staticmethod
     def verify_api_key(api_key: str) -> Optional[Dict[str, Any]]:
         """Verify API key and return user info."""
-        if api_key not in API_KEYS:
-            return None
-
-        user_info = API_KEYS[api_key].copy()
-        user_info["api_key"] = api_key
-        return user_info
+        # Check static API keys first
+        if api_key in API_KEYS:
+            user_info = API_KEYS[api_key]
+            logger.debug(f"Found API key: {api_key}")  # Proper debug logging
+            user = User(
+                user_id=f"user_{api_key[-8:]}",
+                role=user_info["role"],
+                permissions=user_info["permissions"],
+                api_key=api_key,
+            )
+            logger.debug(f"User created: {user.user_id}, role: {user.role}")  # Proper debug logging
+            return user
+        
+        # Check dynamic API key registry
+        if api_key in API_KEY_REGISTRY:
+            key_info = API_KEY_REGISTRY[api_key]
+            user = User(
+                user_id=key_info["user_id"],
+                role=key_info["role"],
+                permissions=key_info["permissions"],
+                api_key=api_key,
+            )
+            return user
+        
+        logger.debug(f"Failed to create user from API key: {api_key}")  # Proper debug logging
+        return None
 
     @staticmethod
     def create_user_from_api_key(api_key: str) -> Optional[User]:
@@ -215,10 +418,8 @@ async def get_current_user(
     # Check for API key in headers
     api_key = request.headers.get("X-API-Key")
     if api_key:
-        print(f"DEBUG: Found API key: {api_key}")  # Debug line
         user = APIKeyAuth.create_user_from_api_key(api_key)
         if user:
-            print(f"DEBUG: User created: {user.user_id}, role: {user.role}")  # Debug line
             # Check rate limit for API key user
             limit = API_KEYS.get(api_key, {}).get("rate_limit", 100)
             if not rate_limiter.check_rate_limit(user.user_id, limit):
@@ -228,8 +429,6 @@ async def get_current_user(
                 )
             user.update_activity()
             return user
-        else:
-            print(f"DEBUG: Failed to create user from API key: {api_key}")  # Debug line
 
     # Check for Bearer token
     if credentials:

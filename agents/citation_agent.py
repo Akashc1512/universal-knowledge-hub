@@ -183,7 +183,7 @@ class CitationAgent(BaseAgent):
 
     async def _format_citation(self, source: Dict, style: str) -> str:
         """
-        Format citation according to specified style.
+        Format citation according to specified style with improved metadata handling.
 
         Args:
             source: Source document
@@ -193,35 +193,142 @@ class CitationAgent(BaseAgent):
             Formatted citation text
         """
         metadata = source.get("metadata", {})
+        
+        # Extract metadata with intelligent fallbacks
+        author = self._extract_author(metadata, source)
+        title = self._extract_title(metadata, source)
+        date = self._extract_date(metadata, source)
+        url = self._extract_url(metadata, source)
+        source_type = metadata.get("source", "unknown")
 
         if style.upper() == "APA":
-            author = metadata.get("author", "Unknown Author")
-            title = metadata.get("title", "Untitled")
-            date = metadata.get("date", "n.d.")
-            url = metadata.get("url", "")
-
-            if url:
+            if url and url.startswith("http"):
                 return f"{author} ({date}). {title}. Retrieved from {url}"
             else:
                 return f"{author} ({date}). {title}."
 
         elif style.upper() == "MLA":
-            author = metadata.get("author", "Unknown Author")
-            title = metadata.get("title", "Untitled")
-            date = metadata.get("date", "n.d.")
-            url = metadata.get("url", "")
-
-            if url:
+            if url and url.startswith("http"):
                 return f'"{title}." {author}, {date}, {url}.'
             else:
                 return f'"{title}." {author}, {date}.'
 
+        elif style.upper() == "CHICAGO":
+            if url and url.startswith("http"):
+                return f'{author}. "{title}." {date}. {url}.'
+            else:
+                return f'{author}. "{title}." {date}.'
+
         else:
-            # Default format
-            author = metadata.get("author", "Unknown Author")
-            title = metadata.get("title", "Untitled")
-            date = metadata.get("date", "n.d.")
-            return f"{author} ({date}). {title}."
+            # Default academic format
+            if url and url.startswith("http"):
+                return f"{author} ({date}). {title}. {url}"
+            else:
+                return f"{author} ({date}). {title}."
+    
+    def _extract_author(self, metadata: Dict, source: Dict) -> str:
+        """Extract author with intelligent fallbacks."""
+        # Try multiple possible author fields
+        author = (
+            metadata.get("author") or 
+            metadata.get("authors") or 
+            metadata.get("creator") or 
+            metadata.get("byline") or
+            source.get("author")
+        )
+        
+        if author:
+            return author
+        
+        # Try to extract from URL domain
+        url = metadata.get("url") or source.get("url") or source.get("link")
+        if url:
+            try:
+                from urllib.parse import urlparse
+                domain = urlparse(url).netloc
+                if domain and domain != "unknown":
+                    return f"{domain.replace('www.', '').title()}"
+            except:
+                pass
+        
+        return "Unknown Author"
+    
+    def _extract_title(self, metadata: Dict, source: Dict) -> str:
+        """Extract title with intelligent fallbacks."""
+        title = (
+            metadata.get("title") or 
+            metadata.get("name") or 
+            source.get("title")
+        )
+        
+        if title:
+            return title
+        
+        # Try to extract from content
+        content = source.get("content", "")
+        if content:
+            # Use first sentence as title
+            sentences = content.split('.')
+            if sentences:
+                potential_title = sentences[0].strip()
+                if len(potential_title) > 10 and len(potential_title) < 100:
+                    return potential_title
+        
+        return "Untitled Document"
+    
+    def _extract_date(self, metadata: Dict, source: Dict) -> str:
+        """Extract date with intelligent fallbacks."""
+        date = (
+            metadata.get("date") or 
+            metadata.get("published_date") or 
+            metadata.get("created_date") or 
+            source.get("date")
+        )
+        
+        if date:
+            return date
+        
+        # Try to extract from URL or content
+        url = metadata.get("url") or source.get("url")
+        if url:
+            # Look for date patterns in URL
+            import re
+            date_patterns = [
+                r'/(\d{4})/(\d{2})/(\d{2})/',  # YYYY/MM/DD
+                r'/(\d{4})-(\d{2})-(\d{2})',   # YYYY-MM-DD
+                r'(\d{4})_(\d{2})_(\d{2})',    # YYYY_MM_DD
+            ]
+            
+            for pattern in date_patterns:
+                match = re.search(pattern, url)
+                if match:
+                    year, month, day = match.groups()
+                    return f"{year}"
+        
+        return "n.d."
+    
+    def _extract_url(self, metadata: Dict, source: Dict) -> str:
+        """Extract URL with intelligent fallbacks."""
+        url = (
+            metadata.get("url") or 
+            metadata.get("link") or 
+            source.get("url") or 
+            source.get("link")
+        )
+        
+        if url and url.startswith("http"):
+            return url
+        
+        # Try to construct URL from source info
+        source_type = metadata.get("source", "unknown")
+        if source_type == "serp_api" or source_type == "google_cse":
+            return "Retrieved from web search"
+        elif source_type == "vector_search":
+            return "Retrieved from knowledge base"
+        elif source_type == "keyword_search":
+            return "Retrieved from document search"
+        
+        return ""
 
     async def _integrate_citations(
         self, content: str, sources: List[Dict], citations: List[Citation]

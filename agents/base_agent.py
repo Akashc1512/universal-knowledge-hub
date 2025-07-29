@@ -3,7 +3,7 @@ Base Agent Class - Common interface and functionality for all agents.
 """
 
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional, List
+from typing import Any, Optional
 from dataclasses import dataclass, field
 from enum import Enum
 import asyncio
@@ -60,7 +60,7 @@ class AgentMessage:
         payload: Actual task data, results, or control information
     """
 
-    header: Dict[str, Any] = field(
+    header: dict[str, Any] = field(
         default_factory=lambda: {
             "message_id": str(uuid.uuid4()),
             "correlation_id": None,
@@ -74,7 +74,7 @@ class AgentMessage:
             "trace_id": None,
         }
     )
-    payload: Dict[str, Any] = field(
+    payload: dict[str, Any] = field(
         default_factory=lambda: {
             "task": None,
             "result": None,
@@ -92,12 +92,12 @@ class QueryContext:
     query: str
     user_id: Optional[str] = None
     session_id: Optional[str] = None
-    domains: List[str] = field(default_factory=list)
+    domains: list[str] = field(default_factory=list)
     complexity_score: float = 0.0
     token_budget: int = int(os.getenv("DEFAULT_TOKEN_BUDGET", "1000"))
     timeout_ms: int = int(os.getenv("AGENT_TIMEOUT_MS", "5000"))
-    user_context: Optional[Dict[str, Any]] = field(default_factory=dict)
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    user_context: Optional[dict[str, Any]] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
     trace_id: Optional[str] = None
 
 
@@ -108,10 +108,10 @@ class AgentResult:
     success: bool
     data: Any
     confidence: float = 0.0
-    token_usage: Dict[str, int] = field(default_factory=lambda: {"prompt": 0, "completion": 0})
+    token_usage: dict[str, int] = field(default_factory=lambda: {"prompt": 0, "completion": 0})
     execution_time_ms: int = 0
     error: Optional[str] = None
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class BaseAgent(ABC):
@@ -144,7 +144,7 @@ class BaseAgent(ABC):
         return self._message_queue
 
     @abstractmethod
-    async def process_task(self, task: Dict[str, Any], context: QueryContext) -> AgentResult:
+    async def process_task(self, task: dict[str, Any], context: QueryContext) -> AgentResult:
         """
         Process a specific task. Must be implemented by each agent.
 
@@ -320,7 +320,7 @@ class BaseAgent(ABC):
         self.is_running = False
         logger.info(f"Agent {self.agent_id} stopped")
 
-    def get_health_status(self) -> Dict[str, Any]:
+    def get_health_status(self) -> dict[str, Any]:
         """Get current health status and metrics."""
         return {
             "agent_id": self.agent_id,

@@ -103,7 +103,7 @@ class RealtimeMessage:
     """Real-time message model."""
     
     message_type: MessageType
-    payload: Dict[str, Any]
+    payload: dict[str, Any]
     user_id: Optional[str] = None
     session_id: Optional[str] = None
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))

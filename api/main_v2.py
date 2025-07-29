@@ -53,7 +53,7 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import Dict, Any, Optional, List, Callable, Union
+from typing import Any, Optional, Callable, Union
 from functools import lru_cache
 
 import structlog
@@ -181,14 +181,14 @@ class ErrorDetail(BaseModel):
     code: str = Field(..., description="Error code")
     message: str = Field(..., description="Human-readable error message")
     field: Optional[str] = Field(None, description="Field that caused the error")
-    context: Optional[Dict[str, Any]] = Field(None, description="Additional context")
+    context: Optional[dict[str, Any]] = Field(None, description="Additional context")
 
 class ErrorResponse(BaseModel):
     """Standard error response format."""
     
     error: str = Field(..., description="Error type")
     message: str = Field(..., description="Error message")
-    details: Optional[List[ErrorDetail]] = Field(None, description="Detailed errors")
+    details: Optional[list[ErrorDetail]] = Field(None, description="Detailed errors")
     request_id: str = Field(..., description="Request correlation ID")
     timestamp: str = Field(..., description="Error timestamp")
     path: str = Field(..., description="Request path")
@@ -216,7 +216,7 @@ class SuccessResponse(BaseModel):
     
     success: bool = Field(True, description="Success indicator")
     data: Any = Field(..., description="Response data")
-    meta: Optional[Dict[str, Any]] = Field(None, description="Response metadata")
+    meta: Optional[dict[str, Any]] = Field(None, description="Response metadata")
     request_id: str = Field(..., description="Request correlation ID")
     
     class Config:
@@ -236,7 +236,7 @@ class HealthResponse(BaseModel):
     version: str = Field(..., description="API version")
     timestamp: str = Field(..., description="Check timestamp")
     uptime_seconds: float = Field(..., description="Service uptime")
-    checks: Dict[str, Dict[str, Any]] = Field(..., description="Component health")
+    checks: dict[str, dict[str, Any]] = Field(..., description="Component health")
     
     class Config:
         schema_extra = {
@@ -701,14 +701,14 @@ async def require_admin(
 # Routes
 @app.get(
     "/",
-    response_model=Dict[str, Any],
+    response_model=dict[str, Any],
     tags=["General"],
     summary="API Root",
     description="Get API information and available endpoints"
 )
 async def root(
     request_id: str = Depends(get_request_id)
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     API root endpoint providing basic information.
     

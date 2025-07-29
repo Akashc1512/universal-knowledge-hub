@@ -80,7 +80,7 @@ export default function QueryForm({
 
   return (
     <div className="w-full max-w-4xl mx-auto">
-      <form onSubmit={handleSubmit} className="space-y-4">
+      <form onSubmit={handleSubmit} className="space-y-4" role="search">
         {/* Query Input */}
         <div className="relative">
           <label htmlFor="query-input" className="sr-only">
@@ -90,6 +90,7 @@ export default function QueryForm({
             <textarea
               ref={inputRef}
               id="query-input"
+              name="query"
               value={query}
               onChange={(e) => {
                 setQuery(e.target.value);
@@ -98,6 +99,8 @@ export default function QueryForm({
               onKeyDown={handleKeyDown}
               placeholder={placeholder}
               disabled={isLoading}
+              aria-describedby={error ? 'query-error' : 'query-help'}
+              aria-invalid={error ? 'true' : 'false'}
               className={`
                 w-full px-4 py-3 pr-12 text-lg border-2 rounded-lg resize-none
                 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent
@@ -108,24 +111,26 @@ export default function QueryForm({
               `}
               rows={3}
               maxLength={maxLength}
-              aria-describedby={error ? 'query-error' : undefined}
             />
             <div className="absolute right-3 top-3">
               {isLoading ? (
-                <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-500" />
+                <div 
+                  className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-500"
+                  aria-label="Processing your question"
+                />
               ) : (
-                <MagnifyingGlassIcon className="h-6 w-6 text-gray-400" />
+                <MagnifyingGlassIcon className="h-6 w-6 text-gray-400" aria-hidden="true" />
               )}
             </div>
           </div>
 
           {/* Character Count */}
           <div className="flex justify-between items-center mt-2 text-sm text-gray-500">
-            <span>
+            <span id="query-help">
               {characterCount} / {maxLength} characters
             </span>
             {isOverLimit && (
-              <span className="text-red-500 font-medium">
+              <span className="text-red-500 font-medium" role="alert">
                 Over character limit
               </span>
             )}
@@ -180,6 +185,7 @@ export default function QueryForm({
                 focus:outline-none focus:ring-2 focus:ring-blue-500
                 disabled:opacity-50 disabled:cursor-not-allowed
               "
+              aria-label={`Try example question: ${example}`}
             >
               {example}
             </button>
